@@ -14,7 +14,13 @@ const proseWords = s => (s.match(/\b(?:[a-z]{3,}|[A-Z][a-z]{3,})\b/g) || []).map
 const STOPWORDS = /\b(where|is|are|and|the|of|to|with|for|as|in|that|then|which|be|by|on|it|this|from|or|if|we|its|thus|hence|here)\b/;
 // Running text has words next to each other ("calculated from"); subscripts like τ_fric are isolated.
 const wordPairs = s => [...s.matchAll(/\b([a-z]{2,})\s+(?=([a-z]{2,})\b)/g)].some(m => isWord(m[1]) && isWord(m[2]));
-const union = bs => ({x0: Math.min(...bs.map(b => b.x0)), y0: Math.min(...bs.map(b => b.y0)), x1: Math.max(...bs.map(b => b.x1)), y1: Math.max(...bs.map(b => b.y1))});
+// Same results as Math.min(...bs.map(...)) (NaN and -0 included), without the temporary arrays.
+const union = bs => {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const b of bs) { x0 = Math.min(x0, b.x0); y0 = Math.min(y0, b.y0); x1 = Math.max(x1, b.x1); y1 = Math.max(y1, b.y1); }
+  return {x0, y0, x1, y1};
+};
+
 const norm = (b, W, H) => ({x0: b.x0 / W, y0: b.y0 / H, x1: b.x1 / W, y1: b.y1 / H});
 const cy = b => (b.y0 + b.y1) / 2;
 
@@ -137,9 +143,9 @@ export function equationBox(boxes, label, W, H, otherLabels = null, debug = null
     for (let added = true; added && run.length;) {
       added = false; const u = union(run);
       for (const b of inCol) {
-        if (run.includes(b) || b.x1 > label.x0 + 1 || b.x1 < left - 0.06 * W || prose({...b, cy: cy(b)})) continue;
+        if (run.includes(b) || b.x1 > label.x0 + 1 || b.x1 < left - 0.06 * W) continue;
         const ov = Math.min(b.y1, u.y1) - Math.max(b.y0, u.y0);
-        if (ov >= 0.4 * (b.y1 - b.y0)) { run.push(b); left = Math.min(left, b.x0); added = true; }
+        if (ov >= 0.4 * (b.y1 - b.y0) && !prose({...b, cy: cy(b)})) { run.push(b); left = Math.min(left, b.x0); added = true; }
       }
     }
     picked = run.length ? [{items: run, ...union(run), s: run.map(b => b.s).join(' ')}] : [];
@@ -170,11 +176,13 @@ export function equationBox(boxes, label, W, H, otherLabels = null, debug = null
   for (let added = picked.length > 0; added;) {
     added = false; const u = union(picked);
     for (const l of lines) {
-      if (picked.includes(l) || l.x1 > label.x0 + 1 || prose(l) || hasOtherLabel(l)) continue;
+      if (picked.includes(l) || l.x1 > label.x0 + 1) continue;
       const ov = Math.min(l.y1, u.y1) - Math.max(l.y0, u.y0);
-      const c = (l.y0 + l.y1) / 2, mine = Math.max(0, Math.max(l.y0, label.y0) - Math.min(l.y1, label.y1));
+      const c = (l.y0 + l.y1) / 2;
+      if (!(c > u.y0 && c < u.y1 && ov >= 0.5 * (l.y1 - l.y0) && l.x1 >= u.x0 - 0.06 * W && l.x0 <= u.x1 + 0.02 * W) || prose(l) || hasOtherLabel(l)) continue;
+      const mine = Math.max(0, Math.max(l.y0, label.y0) - Math.min(l.y1, label.y1));
       const theirs = others.some(o => Math.max(0, Math.max(l.y0, o.y0) - Math.min(l.y1, o.y1)) < mine);
-      if (c > u.y0 && c < u.y1 && ov >= 0.5 * (l.y1 - l.y0) && !theirs && l.x1 >= u.x0 - 0.06 * W && l.x0 <= u.x1 + 0.02 * W) { picked.push(l); added = true; }
+      if (!theirs) { picked.push(l); added = true; }
     }
   }
   if (!picked.length && debug) { const near = lines.filter(l => Math.abs(l.cy - cy(label)) < 4 * h).map(l => `  near ${l.x0.toFixed(0)}-${l.x1.toFixed(0)} y${l.y0.toFixed(0)}-${l.y1.toFixed(0)} prose=${prose(l)} ${JSON.stringify(l.s.slice(0, 50))}`); debug.push(`label ${label.x0.toFixed(0)}-${label.x1.toFixed(0)} y${label.y0.toFixed(0)}-${label.y1.toFixed(0)} h${h.toFixed(1)} col ${col.left.toFixed(0)}-${col.right.toFixed(0)}`, ...near); }
