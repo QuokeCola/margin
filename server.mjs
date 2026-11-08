@@ -8,7 +8,7 @@ import {homedir} from 'node:os';
 import {mkdir, readFile, writeFile, rename, readdir, rm, stat} from 'node:fs/promises';
 import {KEY_PATTERN, MODEL_PATTERN, PAPER_ID, CHAT_ID, updateEnvText, isTextModel, keyHint, cleanName, chatTitle} from './lib/config.mjs';
 import {createStore, PROJECT_ID} from './lib/store.mjs';
-import {lookupPaper, cleanDoi, worksById, searchWorks, workById} from './lib/metadata.mjs';
+import {lookupPaper, cleanDoi, worksById, searchWorks, workById, citingWorks, workSummary} from './lib/metadata.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const ENV_FILE = process.env.MARGIN_ENV_FILE || join(root, '.env');
@@ -217,6 +217,61 @@ app.post('/api/works/search', async (req, res) => {
   const q = req.body?.q;
   if (typeof q !== 'string' || q.trim().length < 8) return res.status(400).json({error: 'Search text is too short.'});
   try { res.json({items: await searchWorks(q, 3)}); } catch { res.status(502).json({error: 'Could not reach OpenAlex.'}); }
+});
+
+// ---------- citation map ----------
+const WEEK = 7 * 864e5;
+const freshFor = (c, key) => c && c.key === key && Date.now() - new Date(c.at) < WEEK;
+// A paper's references and its most-cited citing works, cached with the paper for a week.
+async function neighbours(p, force = false) {
+  const id = p.meta?.openalexId, want = p.meta?.references || [];
+  let changed = false;
+  if (want.length && (force || !freshFor(p.refs, want.join(',')))) { p.refs = {at: now(), key: want.join(','), ids: want.join(','), items: await worksById(want)}; changed = true; }
+  if (id && (force || !freshFor(p.citing, id))) { p.citing = {at: now(), key: id, items: await citingWorks(id, 15)}; changed = true; }
+  if (changed) await store.savePaper(p);
+  return {refs: p.refs?.items || [], citing: p.citing?.items || []};
+}
+// Nodes: the project's papers, what they cite and what cites them. Edges point from citing to cited.
+app.get('/api/projects/:pid/graph', async (req, res) => {
+  const project = await projectOr404(req, res); if (!project) return;
+  const papers = (await Promise.all(project.papers.map(store.loadPaper))).filter(Boolean);
+  const nodes = new Map(), edges = new Map(), failed = [];
+  // Each node collects roles; its kind is derived at the end (library > both > reference/citing).
+  const node = (rec, role) => {
+    const key = rec.openalexId; let n = nodes.get(key);
+    if (!n) nodes.set(key, n = {...rec, id: key, roles: new Set()});
+    else if (role === 'library') Object.assign(n, rec, {id: key});
+    n.roles.add(role);
+    return key;
+  };
+  const edge = (from, to) => { if (from !== to) edges.set(`${from}>${to}`, {source: from, target: to}); };
+  for (const p of papers) {
+    const m = p.meta;
+    if (!m?.openalexId) { nodes.set('local:' + p.id, {id: 'local:' + p.id, roles: new Set(['library']), title: p.name, authors: [], year: null, paperId: p.id, noRecord: true}); continue; }
+    const me = node({...workSummary({id: 'https://openalex.org/' + m.openalexId, doi: m.doi ? 'https://doi.org/' + m.doi : null, title: m.title, authorships: (m.authors || []).map(a => ({author: {display_name: a}})), publication_year: m.year, primary_location: {source: {display_name: m.venue}}, cited_by_count: m.citedBy}), abstract: m.abstract?.slice(0, 1200) || null, paperId: p.id}, 'library');
+    try {
+      const {refs, citing} = await neighbours(p, !!req.query.refresh);
+      for (const r of refs) edge(me, node(r, 'reference'));
+      for (const c of citing) edge(node(c, 'citing'), me);
+    } catch { failed.push(p.name); }
+  }
+  const out = [...nodes.values()].map(({roles, ...n}) => {
+    const kind = roles.has('library') ? 'library' : roles.has('reference') && roles.has('citing') ? 'both' : [...roles][0];
+    if (kind === 'library' && !n.paperId) n.paperId = papers.find(x => x.meta?.openalexId === n.id)?.id;
+    return {...n, kind};
+  });
+  res.json({nodes: out, edges: [...edges.values()], failed});
+});
+// One work's references (most-cited 25) and citing works (most-cited 10), for expanding the map.
+app.get('/api/works/:wid/neighbours', async (req, res) => {
+  const wid = req.params.wid;
+  if (!/^W\d+$/.test(wid)) return res.status(400).json({error: 'Invalid id.'});
+  try {
+    const w = await workById(wid);
+    if (!w) return res.status(404).json({error: 'Not found on OpenAlex.'});
+    const refs = (await worksById(w.references)).sort((a, b) => (b.citedBy ?? 0) - (a.citedBy ?? 0)).slice(0, 25);
+    res.json({refs, citing: await citingWorks(wid, 10)});
+  } catch { res.status(502).json({error: 'Could not reach OpenAlex.'}); }
 });
 
 // Only public web addresses: the server must not be steered at the local machine or the local network.

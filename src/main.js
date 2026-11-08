@@ -8,6 +8,7 @@ import './style.css';
 import {parseReferences, resolveReference, TOKEN, tokenRef, findMentions, tagOf, QUOTE, ANCHOR} from './references.js';
 import {findQuote, textBoxes, detectEquations} from './layout.js';
 import {parseBibliography, findMarkers, matchEntries} from './bib.js';
+import {createMap} from './map.js';
 import {clampZoom, wheelZoomFactor} from './zoom.js';
 pdfjs.GlobalWorkerOptions.workerSrc = worker;
 const $ = s => document.querySelector(s);
@@ -15,11 +16,14 @@ const h = (tag, props = {}, ...kids) => { const el = Object.assign(document.crea
 
 $('#app').innerHTML = `<header><button id="toggle-library" class="icon" title="Show or hide the library" aria-label="Toggle library">☰</button><a class="brand" href="/">m<span>Margin</span></a><span class="subtitle">A little closer to the paper.</span>
 <div class="header-tools"><label class="model-picker" title="Model used for new answers">Model <select id="model" disabled><option>…</option></select></label><span id="connection">Connecting…</span><button id="open-settings">Settings</button></div></header>
-<main><aside class="library"><div class="project-bar"><small>PROJECT</small><div class="project-row"><select id="project" aria-label="Project"></select><button id="project-rename" class="icon" title="Rename project" aria-label="Rename project">✎</button><button id="project-delete" class="icon del" title="Delete project" aria-label="Delete project">×</button></div></div>
+<main><aside class="library"><div class="project-bar"><small>PROJECT</small><div class="project-row"><select id="project" aria-label="Project"></select><button id="project-rename" class="icon" title="Rename project" aria-label="Rename project">✎</button><button id="project-delete" class="icon del" title="Delete project" aria-label="Delete project">×</button></div><button id="open-map" class="map-button" title="How the papers in this project cite each other">◎ Citation map</button></div>
 <div class="lib-section"><div class="lib-head"><small>PAPERS</small><label class="file-button small">+ Add PDF<input id="file" type="file" accept="application/pdf"></label></div><ul id="papers" aria-label="Papers"></ul></div>
 <div class="lib-section"><div class="lib-head"><small>CHATS</small><button id="new-chat-side" class="small" title="New chat about the open paper">+ New</button></div><ul id="chats" aria-label="Chats"></ul></div></aside>
 <section class="chat"><div class="section-head"><div><small id="chat-paper">YOUR STUDY DESK</small><h1 id="chat-title">Read. Question. Understand.</h1></div><button id="new-chat" disabled>New chat</button></div><div id="messages" tabindex="0" aria-label="Conversation"></div><form id="ask"><div id="context" hidden></div><textarea id="question" aria-label="Question about the paper" placeholder="What would you like to understand?" rows="3" maxlength="8000"></textarea><div class="compose-bottom"><span>Enter to send · Ctrl+Enter for a new line. Paper text + this chat are sent to OpenAI.</span><button id="send" type="submit">Ask ↗</button></div></form><p id="notice" role="status">Add a PDF, or pick one from the library.</p></section>
-<section class="reader"><div class="section-head"><div><small>SOURCE DOCUMENT</small><h2 id="filename">Your paper, in context</h2><p id="paper-byline"></p></div><button id="paper-info" class="small" disabled title="Paper details: authors, venue, DOI, abstract">ⓘ Info</button></div><div class="toolbar"><label><input id="follow" type="checkbox" checked> Follow chat</label><div><label>Page <input id="page" type="number" min="1" value="1"></label><span id="total">/ —</span><button id="go">Go</button></div><button id="marker" title="Marker: drag a box over any part of the page to ask about it (Esc to cancel)" aria-pressed="false">✎ Mark</button><div class="zoom" title="Pinch the trackpad (or Ctrl + scroll) over the page to zoom"><button id="zoom-out" aria-label="Zoom out">−</button><button id="zoom-reset" title="Reset to 100%">100%</button><button id="zoom-in" aria-label="Zoom in">+</button></div></div><div id="pdf"><div class="empty"><div class="paper-icon">∑</div><h2>Make room for the original.</h2><p>Add a PDF from your laptop, or pick a paper from the library.<br>Pinch the trackpad over a page to zoom.</p></div></div><details id="manual"><summary>Find a reference / correct an equation location</summary><div class="manual-grid"><label>Equation <input id="equation" placeholder="61"></label><label>PDF page <input id="map-page" type="number" min="1" value="1"></label><label>Position from top (%) <input id="map-y" type="number" min="0" max="100" value="50"></label><button id="find">Find equation</button><button id="save">Save correction</button><button id="remove">Remove correction</button></div><p>Corrections are saved with this paper in your library. Click the PDF while this panel is open to pick a position. Pages use PDF order, not printed journal numbers.</p></details></section></main>
+<section class="reader"><div class="section-head"><div><small>SOURCE DOCUMENT</small><h2 id="filename">Your paper, in context</h2><p id="paper-byline"></p></div><button id="paper-info" class="small" disabled title="Paper details: authors, venue, DOI, abstract">ⓘ Info</button></div><div class="toolbar"><label><input id="follow" type="checkbox" checked> Follow chat</label><div><label>Page <input id="page" type="number" min="1" value="1"></label><span id="total">/ —</span><button id="go">Go</button></div><button id="marker" title="Marker: drag a box over any part of the page to ask about it (Esc to cancel)" aria-pressed="false">✎ Mark</button><div class="zoom" title="Pinch the trackpad (or Ctrl + scroll) over the page to zoom"><button id="zoom-out" aria-label="Zoom out">−</button><button id="zoom-reset" title="Reset to 100%">100%</button><button id="zoom-in" aria-label="Zoom in">+</button></div></div><div id="pdf"><div class="empty"><div class="paper-icon">∑</div><h2>Make room for the original.</h2><p>Add a PDF from your laptop, or pick a paper from the library.<br>Pinch the trackpad over a page to zoom.</p></div></div><details id="manual"><summary>Find a reference / correct an equation location</summary><div class="manual-grid"><label>Equation <input id="equation" placeholder="61"></label><label>PDF page <input id="map-page" type="number" min="1" value="1"></label><label>Position from top (%) <input id="map-y" type="number" min="0" max="100" value="50"></label><button id="find">Find equation</button><button id="save">Save correction</button><button id="remove">Remove correction</button></div><p>Corrections are saved with this paper in your library. Click the PDF while this panel is open to pick a position. Pages use PDF order, not printed journal numbers.</p></details></section>
+<section id="map-view" hidden aria-label="Citation map"><div class="map-bar"><button id="map-back">← Back to reading</button><div class="map-title"><small>CITATION MAP</small><h2 id="map-project"></h2></div>
+<div class="map-filters"><label><input type="checkbox" id="mf-refs" checked> <i class="dot k-reference"></i>References</label><label><input type="checkbox" id="mf-citing" checked> <i class="dot k-citing"></i>Citing papers</label><label title="Only papers linked to two or more of your papers"><input type="checkbox" id="mf-shared"> Only shared</label><label><input type="checkbox" id="mf-year"> Arrange by year</label><button id="map-fit" class="small" title="Fit the map to the window">Fit</button><button id="map-refresh" class="small" title="Fetch references and citations again">↻</button></div></div>
+<div class="map-body"><svg id="map-svg" role="img" aria-label="Citation graph"></svg><div class="map-legend"><span><i class="dot k-library"></i>In this project</span><span><i class="dot k-reference"></i>Cited by your papers</span><span><i class="dot k-citing"></i>Cites your papers</span><span><i class="dot k-both"></i>Both</span><span class="hint">Arrows point to the cited paper · size = citations · drag to move, scroll to zoom</span></div><p id="map-status" role="status"></p><aside id="map-card" hidden></aside></div></section></main>
 <div id="ref-card" hidden role="dialog" aria-label="Reference"></div>
 <div id="drop-zone" hidden><div>Drop the PDF to add it to the project</div></div>
 <div id="pdf-pop" hidden><button type="button" id="pop-ask">Ask AI ↗</button></div>
@@ -158,7 +162,7 @@ $('#project').onchange = async e => {
     return;
   }
   if (working) { renderProjects(); return; }
-  await closePaper(); await loadProject(v); renderProjects();
+  closeMap(); await closePaper(); await loadProject(v); renderProjects();
   notice(`Project "${project.name}": ${project.papers.length ? 'pick a paper in the sidebar, or add a PDF.' : 'add a PDF to start.'}`);
 };
 $('#project-rename').onclick = async () => {
@@ -859,7 +863,7 @@ async function getPdf(rec, button) {
     if (!r?.ok) { notice(r?.reason === 'closed' ? 'Sign-in window closed; nothing was added.' : r?.reason || 'No PDF was downloaded.'); return; }
     try {
       const summary = await api(pathP('papers'), {body: r.bytes, headers: {'Content-Type': 'application/pdf', 'X-Filename': encodeURIComponent(r.filename || 'paper.pdf')}});
-      await api(`/api/papers/${summary.id}/metadata`, {body: rec.openalexId ? {openalexId: rec.openalexId} : {doi: rec.doi}}).catch(() => {});
+      if (!summary.meta) await api(`/api/papers/${summary.id}/metadata`, {body: rec.openalexId ? {openalexId: rec.openalexId} : {doi: rec.doi}}).catch(() => {});
       await added(summary, 'signed-in download');
     } catch (e) { notice('Could not add the downloaded PDF: ' + e.message); }
     return;
@@ -886,11 +890,67 @@ window.addEventListener('drop', async e => {
     const summary = await api(pathP('papers'), {body: new Uint8Array(await file.arrayBuffer()), headers: {'Content-Type': 'application/pdf', 'X-Filename': encodeURIComponent(file.name)}});
     // A PDF dropped soon after "Add to project" is taken to be that reference.
     const ref = pendingRef && Date.now() - pendingRef.at < 30 * 60e3 ? pendingRef.rec : null; pendingRef = null;
-    if (ref) await api(`/api/papers/${summary.id}/metadata`, {body: ref.openalexId ? {openalexId: ref.openalexId} : {doi: ref.doi}}).catch(() => {});
+    // Only a PDF new to the library takes the reference's details; one already stored keeps its own.
+    if (ref && !summary.meta) await api(`/api/papers/${summary.id}/metadata`, {body: ref.openalexId ? {openalexId: ref.openalexId} : {doi: ref.doi}}).catch(() => {});
     await refreshProject(); refreshProjects();
     notice(`Added “${file.name}” to ${project.name}. Open it from the sidebar.`);
   } catch (err) { notice('Could not add PDF: ' + err.message); }
 });
+
+// ---------- citation map ----------
+let map = null, mapProject = null;
+async function openMap(refresh = false) {
+  if (!project) return;
+  document.body.classList.add('map-mode'); $('#map-view').hidden = false; hideRefCard(); hidePop();
+  $('#map-project').textContent = project.name; $('#map-card').hidden = true;
+  if (map && mapProject === project.id && !refresh) { map.fit(0); return; }
+  map?.destroy(); map = createMap($('#map-svg'), {onSelect: n => showMapCard(n)}); mapProject = project.id;
+  const n = project.papers.length;
+  $('#map-status').textContent = n ? `Building the map: fetching references and citing papers for ${n} paper${n === 1 ? '' : 's'}…` : 'Add papers to this project to see how they cite each other.';
+  if (!n) return;
+  try {
+    const g = await api(pathP('graph') + (refresh ? '?refresh=1' : ''));
+    if (mapProject !== project.id) return;
+    map.setData(g); map.setFilters(readFilters());
+    const missing = project.papers.filter(p => !p.meta?.openalexId).length;
+    mapCounts(missing ? `${missing} paper${missing === 1 ? ' has' : 's have'} no OpenAlex record yet (set the DOI in ⓘ Info), so ${missing === 1 ? 'it is' : 'they are'} shown unconnected.` : g.failed.length ? `Could not fetch links for: ${g.failed.join(', ')}.` : '');
+  } catch (e) { $('#map-status').textContent = e.message; }
+}
+function closeMap() { document.body.classList.remove('map-mode'); $('#map-view').hidden = true; }
+const readFilters = () => ({refs: $('#mf-refs').checked, citing: $('#mf-citing').checked, shared: $('#mf-shared').checked, byYear: $('#mf-year').checked});
+function mapCounts(extra = '') {
+  const c = map.counts();
+  $('#map-status').textContent = `${c.library} in project · ${c.reference + c.both} cited · ${c.citing + c.both} citing · ${c.shared} shared · ${c.edges} links${extra ? ' — ' + extra : ''}`;
+}
+for (const id of ['#mf-refs', '#mf-citing', '#mf-shared', '#mf-year']) $(id).onchange = () => { if (map) { map.setFilters(readFilters()); mapCounts(); } };
+$('#open-map').onclick = () => openMap();
+$('#map-back').onclick = closeMap;
+$('#map-fit').onclick = () => map?.fit();
+$('#map-refresh').onclick = () => openMap(true);
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#map-view').hidden && $('#map-card').hidden) closeMap(); else if (e.key === 'Escape') $('#map-card').hidden = true; });
+
+function showMapCard(n) {
+  const card = $('#map-card');
+  if (!n) { card.hidden = true; return; }
+  const have = n.paperId ? project.papers.find(p => p.id === n.paperId) : inProject(n);
+  const kindText = {library: 'In this project', reference: 'Cited by your papers', citing: 'Cites your papers', both: 'Cited by and citing your papers'}[n.kind] + (n.degree >= 2 && n.kind !== 'library' ? ` · linked to ${n.degree} of your papers` : '');
+  const actions = h('div', {className: 'ref-actions'});
+  if (have) actions.append(h('button', {className: 'small primary', textContent: 'Open in Margin', onclick: () => { closeMap(); openPaper(have.id); }}));
+  else actions.append(h('button', {className: 'small primary', textContent: 'Add to project', onclick: async e => { await getPdf(n, e.target); if (inProject(n)) openMap(true); }}));
+  if (n.id && !n.id.startsWith('local:') && !n.expanded) actions.append(h('button', {className: 'small', textContent: 'Expand', title: 'Show this paper’s own references and citing papers', onclick: async e => {
+    e.target.disabled = true; e.target.textContent = 'Loading…';
+    try { map.expand(n.id, await api(`/api/works/${n.id}/neighbours`)); mapCounts(); e.target.remove(); } catch (err) { e.target.textContent = 'Failed'; notice(err.message); }
+  }}));
+  if (n.doi) actions.append(h('a', {className: 'small-link', href: `https://doi.org/${n.doi}`, target: '_blank', rel: 'noopener noreferrer', textContent: 'DOI ↗'}));
+  card.replaceChildren(h('button', {className: 'icon map-card-close', textContent: '×', title: 'Close', onclick: () => { card.hidden = true; }}),
+    h('small', {className: `map-kind ${n.kind}`, textContent: kindText}),
+    h('h3', {textContent: n.title || 'Untitled'}),
+    h('div', {className: 'ref-meta', textContent: [authorsShort(n), n.year, n.venue].filter(Boolean).join(' · ')}),
+    ...(n.citedBy != null ? [h('div', {className: 'ref-meta', textContent: `Cited by ${n.citedBy}`})] : []),
+    ...(n.abstract ? [h('p', {className: 'ref-abstract', textContent: n.abstract.slice(0, 700) + (n.abstract.length > 700 ? '…' : '')})] : n.noRecord ? [h('p', {className: 'hint', textContent: 'No OpenAlex record yet: open the paper and set its DOI in ⓘ Info to connect it.'})] : []),
+    actions);
+  card.hidden = false;
+}
 
 // ---------- marker: drag a box over any area of the page ----------
 let marking = false, draft = null, markedAt = 0;
