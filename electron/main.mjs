@@ -62,7 +62,7 @@ ipcMain.handle('margin:fetch-with-login', async (event, url, title) => {
   const ses = session.fromPartition('persist:library');
   return new Promise(resolve => {
     const win = new BrowserWindow({width: 1100, height: 860, parent: BrowserWindow.fromWebContents(event.sender) ?? undefined, autoHideMenuBar: true,
-      title: `Sign in and download the PDF${title ? ' — ' + title.slice(0, 80) : ''}`,
+      title: `Sign in if asked — Margin downloads the PDF automatically${title ? ' — ' + title.slice(0, 60) : ''}`,
       webPreferences: {session: ses, contextIsolation: true, sandbox: true, nodeIntegration: false}});
     let done = false;
     const finish = result => {
@@ -76,7 +76,7 @@ ipcMain.handle('margin:fetch-with-login', async (event, url, title) => {
       item.once('done', async (_e2, state) => {
         if (state !== 'completed') return; // cancelled: keep the window open for another try
         const bytes = await readFile(file).catch(() => null); await rm(file, {force: true});
-        if (!bytes || bytes.subarray(0, 5).toString() !== '%PDF-') { win.setTitle('That download was not a PDF. Try the PDF link or button on the page.'); return; }
+        if (!bytes || bytes.subarray(0, 5).toString() !== '%PDF-') { if (!win.isDestroyed()) win.setTitle('Sign in if asked — Margin will download the PDF once you have access'); return; }
         finish({ok: true, bytes: new Uint8Array(bytes), filename: item.getFilename()});
       });
     };
@@ -93,6 +93,27 @@ ipcMain.handle('margin:fetch-with-login', async (event, url, title) => {
     });
     // Pop-ups from login flows stay in the same session; downloads from them are caught too.
     win.webContents.setWindowOpenHandler(() => ({action: 'allow', overrideBrowserWindowOptions: {autoHideMenuBar: true, webPreferences: {session: ses, contextIsolation: true, sandbox: true}}}));
+    // After each page load, look for the paper's PDF link and download it without waiting for a click:
+    // the citation_pdf_url tag most publishers set for indexers, or an embedded PDF viewer frame (IEEE,
+    // ScienceDirect). Before sign-in this usually yields a login page; that is ignored and retried after
+    // the next navigation.
+    const FIND_PDF = `(() => {
+      const meta = document.querySelector('meta[name="citation_pdf_url"]')?.content;
+      if (meta) return meta;
+      const frame = [...document.querySelectorAll('iframe, embed, object')].map(e => e.src || e.data || '').find(u => /\\.pdf\\b|getPDF|stamp\\.jsp|pdfft|\\/pdf\\//i.test(u));
+      return frame || null;
+    })()`;
+    const tryPage = async wc => {
+      if (done || wc.isDestroyed()) return;
+      const url = await wc.executeJavaScript(FIND_PDF, true).catch(() => null);
+      if (url && /^https?:/i.test(url) && !asked.has(url)) { asked.add(url); wc.downloadURL(url); }
+    };
+    const watch = wc => {
+      wc.on('did-navigate', () => asked.clear());          // a new page (e.g. after sign-in) may now give the real PDF
+      wc.on('did-finish-load', () => tryPage(wc));
+    };
+    watch(win.webContents);
+    win.webContents.on('did-create-window', child => watch(child.webContents));
     win.on('closed', () => finish({ok: false, reason: 'closed'}));
     win.on('page-title-updated', e => e.preventDefault()); // keep the instruction in the title bar
     signIn = {win};
