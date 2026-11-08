@@ -19,6 +19,8 @@ export function createEquationEditor(app) {
   const {h} = app, $ = s => document.querySelector(s);
   let on = false, selected = null, drag = null, editor = null, undo = [], run = null, keyBurst = 0;
   const fresh = new Map(); // suggestion key -> order, for the reveal animation of new AI results
+  const justAccepted = new Map(); // label -> order, for the accept animation
+  const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   const pageEl = n => document.querySelector(`.pdf-page[data-page="${n}"]`);
   const keyOf = f => f.suggest ? `ai?${f.label}` : `${f.source}:${f.label}:${f.page}`;
@@ -53,8 +55,9 @@ export function createEquationEditor(app) {
   }
   function frameEl(f) {
     const key = keyOf(f);
-    const d = h('div', {className: `eq-frame ${f.suggest ? 'suggest' : f.source}${selected === key ? ' selected' : ''}${fresh.has(key) ? ' reveal' : ''}`, tabIndex: 0});
+    const d = h('div', {className: `eq-frame ${f.suggest ? 'suggest' : f.source}${selected === key ? ' selected' : ''}${fresh.has(key) ? ' reveal' : ''}${!f.suggest && f.source === 'ai' && justAccepted.has(f.label) ? ' accepted-now' : ''}`, tabIndex: 0});
     if (fresh.has(key)) d.style.setProperty('--i', fresh.get(key));
+    else if (!f.suggest && justAccepted.has(f.label)) d.style.setProperty('--i', justAccepted.get(f.label));
     d.dataset.key = key;
     d.setAttribute('role', 'group');
     d.setAttribute('aria-label', f.suggest ? `AI suggestion: Eq. (${f.label}), page ${f.page}. Enter accepts, Delete rejects.`
@@ -110,13 +113,20 @@ export function createEquationEditor(app) {
   function accept(labels) {
     const next = copy();
     for (const l of labels) if (next[l]?.source === 'ai') next[l] = {...next[l], accepted: true};
+    // Accepted frames turn solid with a short pulse and a check mark (staggered for "Accept all").
+    labels.forEach((l, i) => justAccepted.set(l, Math.min(i, 12)));
+    setTimeout(() => labels.forEach(l => justAccepted.delete(l)), 900 + Math.min(labels.length, 12) * 60);
     commit(next);
     app.notice(labels.length === 1 ? `AI frame of Eq. (${labels[0]}) accepted.` : `${plural(labels.length, 'AI frame')} accepted.`);
   }
   function reject(labels) {
     const next = copy();
     for (const l of labels) if (next[l]?.source === 'ai' && !next[l].accepted) delete next[l];
-    commit(next);
+    // Rejected suggestions shrink and fade out before they are removed.
+    const els = labels.map(l => document.querySelector(`.eq-frame.suggest[data-key="${CSS.escape(`ai?${l}`)}"]`)).filter(Boolean);
+    if (!els.length || reduced()) { commit(next); return; }
+    els.forEach((el, i) => { el.style.setProperty('--i', Math.min(i, 12)); el.classList.add('rejecting'); });
+    setTimeout(() => commit(next), 240 + Math.min(els.length - 1, 12) * 30);
   }
   function undoLast() {
     const prev = undo.pop();

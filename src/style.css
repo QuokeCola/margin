@@ -430,3 +430,11 @@ dialog .segmented label{margin:0;display:block;cursor:pointer;position:relative}
 @keyframes eq-reveal{from{opacity:0;clip-path:inset(0 100% 0 0)}to{opacity:1;clip-path:inset(0 -20px 0 0)}}
 @keyframes eq-chip-pop{from{transform:scale(.6);opacity:0}to{transform:none;opacity:1}}
 @keyframes eq-glow{0%{box-shadow:0 0 0 0 var(--eq-ai);opacity:.55}100%{box-shadow:0 0 0 8px var(--eq-ai);opacity:0}}
+/* Accepting an AI suggestion: the frame settles with a pulse and a check mark pops on its corner. */
+.eq-frame.accepted-now{animation:eq-accept .45s cubic-bezier(.3,1.5,.5,1) both;animation-delay:calc(var(--i,0) * 60ms)}
+.eq-frame.accepted-now::after{content:"✓";position:absolute;top:-10px;right:-10px;width:20px;height:20px;border-radius:50%;display:grid;place-items:center;font:700 12px/1 system-ui,sans-serif;color:var(--on-primary);background:var(--eq-ai);pointer-events:none;animation:eq-check .9s ease both;animation-delay:calc(var(--i,0) * 60ms)}
+@keyframes eq-accept{0%{transform:scale(1);background:var(--eq-ai-fill)}35%{transform:scale(1.035);box-shadow:0 0 0 4px var(--eq-ai-fill)}100%{transform:none;box-shadow:none}}
+@keyframes eq-check{0%{transform:scale(0);opacity:0}25%{transform:scale(1.2);opacity:1}45%{transform:scale(1)}80%{opacity:1}100%{transform:scale(.9);opacity:0}}
+/* Rejecting: the suggestion shrinks and fades away. */
+.eq-frame.rejecting{animation:eq-reject .24s ease-in both;animation-delay:calc(var(--i,0) * 30ms);pointer-events:none}
+@keyframes eq-reject{to{opacity:0;transform:scale(.9);filter:blur(1px)}}
