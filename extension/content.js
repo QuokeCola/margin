@@ -25,10 +25,11 @@ function collect() {
   if (/(^|\.)journals\.sagepub\.com$/.test(host) && d) add(`https://journals.sagepub.com/doi/pdf/${d}?download=true`);
   if (/(^|\.)dl\.acm\.org$/.test(host) && d) add(`https://dl.acm.org/doi/pdf/${d}`);
   if (/(^|\.)iopscience\.iop\.org$/.test(host) && d) add(`https://iopscience.iop.org/article/${d}/pdf`);
+  const late = []; // constructed links, tried only after the page's own links
   if (/(^|\.)sciencedirect\.com$/.test(host)) {
     const pii = (path.match(/\/pii\/([A-Z0-9]+)/i) || [])[1];
     add(meta('citation_pdf_url'));
-    if (pii) add(`https://www.sciencedirect.com/science/article/pii/${pii}/pdfft?isDTMRedir=true&download=true`);
+    if (pii) late.push(`https://www.sciencedirect.com/science/article/pii/${pii}/pdfft?isDTMRedir=true&download=true`);
   }
   add(meta('citation_pdf_url'));
   add(meta('eprints.document_url'));
@@ -38,16 +39,21 @@ function collect() {
   }
   // Links: only ones that clearly belong to this article. A bare ".pdf" link must point at the article's
   // DOI or id; links in page chrome (header, footer, navigation, sidebars) and flyers/guides are ignored.
-  const key = (doi ? doi.split('/').pop() : path.split('/').filter(Boolean).pop() || '').toLowerCase();
+  // Identifiers of this article: DOI suffix, ScienceDirect PII, last path segment. Links must carry one,
+  // so "recommended articles" and other papers' PDF links on the page are never used.
+  const keys = [doi && doi.split('/').pop(), (path.match(/\/pii\/([A-Z0-9]+)/i) || [])[1], path.split('/').filter(Boolean).pop()]
+    .filter(k => k && k.length >= 4).map(k => k.toLowerCase());
+  const own = href => !keys.length || keys.some(k => decodeURIComponent(href).toLowerCase().includes(k));
   for (const a of document.querySelectorAll('a[href]')) {
     if (a.closest('header, footer, nav, aside, [role="navigation"], [role="banner"], [role="contentinfo"]')) continue;
     const text = (a.textContent || '').trim().toLowerCase(), href = a.getAttribute('href') || '';
     if (/flyer|brochure|guide|instruction|template|poster|catalog|policy|terms|licen[cs]e/i.test(href + ' ' + text)) continue;
     const saysPdf = /^(download|view|get|open)?\s*(full[- ]text\s*|article\s*)?pdf\b|download (article|paper)|^pdf$/.test(text);
-    const ownPdf = /\.pdf($|\?)|\/pdf(\/|$|\?)/i.test(href) && key.length >= 4 && decodeURIComponent(href).toLowerCase().includes(key);
-    if (saysPdf || ownPdf) add(href);
+    const pdfLike = /\.pdf($|\?)|\/pdf(\/|$|\?)|pdfft/i.test(href);
+    if ((saysPdf || pdfLike) && own(href)) add(href);
     if (c.length > 12) break;
   }
+  late.forEach(add);
   const isPdf = document.contentType === 'application/pdf';
   return {url: location.href, doi, title, candidates: isPdf ? [location.href] : c, isPdf};
 }

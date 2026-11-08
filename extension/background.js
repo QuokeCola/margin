@@ -1,9 +1,16 @@
 // Margin connector — background worker. Finds the local Margin app, matches publisher pages to the
 // papers Margin asked for, downloads the PDF with the browser's own logins and sends it to Margin.
 const PORTS = [47317, 4317];            // desktop app, browser version
-const tabRequests = new Map();          // tabId -> request id (tabs Margin opened, or matched pages)
+// State that must survive the worker being restarted (Chrome stops idle workers at any time).
+const state = {tabs: {}, navigated: {}, tries: {}};   // tabId -> request id; request id -> true; request id -> count
+const loaded = chrome.storage.session.get('state').then(r => Object.assign(state, r.state || {}));
+const save = () => chrome.storage.session.set({state});
+const tabRequests = {get: id => state.tabs[id], has: id => id in state.tabs, set: (id, rid) => { state.tabs[id] = rid; save(); }, delete: id => { delete state.tabs[id]; save(); }};
 const finished = new Set();             // request ids already delivered
-const tried = new Map();                // request id -> Set of URLs already tried
+const tried = new Map();                // request id -> Set of URLs already tried (this worker's lifetime)
+const MAX_TRIES = 4;                    // background downloads per paper, so publishers are not hammered
+// Sites that only serve the PDF to a real page navigation: skip background downloads there.
+const NAVIGATE_ONLY = /(^|\.)sciencedirect\.com$/;
 
 const getCode = async () => (await chrome.storage.local.get('code')).code || '';
 
@@ -58,12 +65,15 @@ async function deliver(req, buf) {
   if (r.ok) { finished.add(req.id); return true; }
   return false;
 }
-async function tryCandidates(req, urls, referrer) {
+async function tryCandidates(req, urls, referrer, {force = false} = {}) {
+  await loaded;
   if (finished.has(req.id)) return true;
   const done = tried.get(req.id) || new Set(); tried.set(req.id, done);
   for (const url of urls) {
     if (done.has(url)) continue;
-    done.add(url);
+    let host = ''; try { host = new URL(url).hostname; } catch {}
+    if (!force && (NAVIGATE_ONLY.test(host) || (state.tries[req.id] || 0) >= MAX_TRIES)) continue;
+    done.add(url); state.tries[req.id] = (state.tries[req.id] || 0) + 1; save();
     try {
       const r = await fetchPdf(url, referrer);
       note(req.id, {stage: 'fetch', url, status: r.status, type: r.type, size: r.size, pdf: r.ok, final: r.finalUrl});
@@ -80,7 +90,17 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       const req = await requestFor(sender.tab.id, msg.info);
       if (!req) return;
       note(req.id, {stage: 'page', url: msg.info.url, doi: msg.info.doi, title: msg.info.title, candidates: msg.info.candidates.length});
-      await tryCandidates(req, msg.info.candidates, msg.info.url);
+      if (await tryCandidates(req, msg.info.candidates, msg.info.url)) return;
+      // Some publishers (ScienceDirect) serve the PDF only to a real page navigation, like clicking
+      // "View PDF". Do that once per paper in the tab Margin opened, with the page's own link; the PDF
+      // response is caught below.
+      await loaded;
+      const best = msg.info.candidates.find(u => /md5=|pid=/.test(u)) || msg.info.candidates[0];
+      if (best && !state.navigated[req.id] && tabRequests.get(sender.tab.id) === req.id && !msg.info.isPdf) {
+        state.navigated[req.id] = true; save();
+        note(req.id, {stage: 'navigate', url: best});
+        chrome.tabs.update(sender.tab.id, {url: best});
+      }
     })();
   }
   if (msg?.type === 'status') { margin().then(m => reply({margin: m})); return true; }
@@ -91,18 +111,23 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
 // Margin opens papers with #margin-request=<id>; remember that tab for the pages that follow (sign-in, redirects).
 chrome.tabs.onUpdated.addListener((tabId, change) => {
   const m = change.url && change.url.match(/[#&]margin-request=([0-9a-f]{16})/);
-  if (m) tabRequests.set(tabId, m[1]);
+  if (m) loaded.then(() => tabRequests.set(tabId, m[1]));
 });
-chrome.tabs.onRemoved.addListener(tabId => tabRequests.delete(tabId));
+chrome.tabs.onRemoved.addListener(tabId => { loaded.then(() => { if (tabRequests.has(tabId)) tabRequests.delete(tabId); }); });
+// A tab opened from the paper's tab (ScienceDirect opens "View PDF" in a new tab) belongs to the same request.
+chrome.tabs.onCreated.addListener(tab => { loaded.then(() => { if (tab.openerTabId != null && tabRequests.has(tab.openerTabId)) tabRequests.set(tab.id, tabRequests.get(tab.openerTabId)); }); });
 
 // PDFs that open in the browser's viewer (content scripts do not run there).
 chrome.webRequest.onHeadersReceived.addListener(details => {
-  if (details.tabId < 0 || !tabRequests.has(details.tabId)) return;
+  if (details.tabId < 0 || !(details.tabId in state.tabs)) return;
   const type = (details.responseHeaders || []).find(h => h.name.toLowerCase() === 'content-type')?.value || '';
   if (!/pdf/i.test(type)) return;
   (async () => {
     const req = (await pending()).find(r => r.id === tabRequests.get(details.tabId));
-    if (req) await tryCandidates(req, [details.url], details.initiator);
+    if (!req) return;
+    note(req.id, {stage: 'pdf-in-tab', url: details.url});
+    tried.get(req.id)?.delete(details.url);
+    await tryCandidates(req, [details.url], details.initiator, {force: true}); // the PDF itself, once
   })();
 }, {urls: ['<all_urls>'], types: ['main_frame', 'sub_frame']}, ['responseHeaders']);
 
