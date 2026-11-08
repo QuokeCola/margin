@@ -43,7 +43,7 @@ Requires Node.js 22.12+ (Node 24 LTS recommended).
 git clone https://github.com/QuokeCola/margin.git
 cd margin
 npm ci
-npm run app          # desktop window (Electron)
+npm run app          # desktop window (Electron); needed for Add to project via publisher sign-in
 # or, in a browser:
 npm run dev          # then open http://127.0.0.1:4317
 ```

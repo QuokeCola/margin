@@ -268,3 +268,5 @@ body.map-mode .chat,body.map-mode .reader{display:none}
 #map-svg .node:focus{outline:none}#map-svg .node:focus-visible circle{stroke:#e0a020;stroke-width:3}
 #project{text-overflow:ellipsis}
 #map-svg .year-axis line{stroke:#d9e1d4;stroke-dasharray:3 4}#map-svg .year-axis text{font:11px Inter,system-ui,sans-serif;fill:#8a9c7d;text-anchor:middle}
+#toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:90;max-width:min(640px,calc(100vw - 32px));background:#203c39;color:#f4f6f1;font-size:13px;line-height:1.45;padding:10px 16px;border-radius:10px;box-shadow:0 10px 30px #1a2b2840;animation:rise .25s var(--ease-out)}
+#toast[hidden]{display:none}

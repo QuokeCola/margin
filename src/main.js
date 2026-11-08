@@ -24,6 +24,7 @@ $('#app').innerHTML = `<header><button id="toggle-library" class="icon" title="S
 <section id="map-view" hidden aria-label="Citation map"><div class="map-bar"><button id="map-back">← Back to reading</button><div class="map-title"><small>CITATION MAP</small><h2 id="map-project"></h2></div>
 <div class="map-filters"><label><input type="checkbox" id="mf-refs" checked> <i class="dot k-reference"></i>References</label><label><input type="checkbox" id="mf-citing" checked> <i class="dot k-citing"></i>Citing papers</label><label title="Only papers linked to two or more of your papers"><input type="checkbox" id="mf-shared"> Only shared</label><label><input type="checkbox" id="mf-year"> Arrange by year</label><button id="map-fit" class="small" title="Fit the map to the window">Fit</button><button id="map-refresh" class="small" title="Fetch references and citations again">↻</button></div></div>
 <div class="map-body"><svg id="map-svg" role="img" aria-label="Citation graph"></svg><div class="map-legend"><span><i class="dot k-library"></i>In this project</span><span><i class="dot k-reference"></i>Cited by your papers</span><span><i class="dot k-citing"></i>Cites your papers</span><span><i class="dot k-both"></i>Both</span><span class="hint">Arrows point to the cited paper · size = citations · drag to move, scroll to zoom</span></div><p id="map-status" role="status"></p><aside id="map-card" hidden></aside></div></section></main>
+<div id="toast" role="status" aria-live="polite" hidden></div>
 <div id="ref-card" hidden role="dialog" aria-label="Reference"></div>
 <div id="drop-zone" hidden><div>Drop the PDF to add it to the project</div></div>
 <div id="pdf-pop" hidden><button type="button" id="pop-ask">Ask AI ↗</button></div>
@@ -43,6 +44,13 @@ let bib = {start: null, entries: new Map()}, refHits = {}, refRecords = [], refB
 let working = false, loading = false, generation = 0, activeRef = null, renderQueue = Promise.resolve();
 let zoom = 1;
 try { zoom = clampZoom(Number(localStorage.getItem('margin-zoom')) || 1); } catch {}
+// Short message that stays visible in every view (the status line is hidden while the map is open).
+let toastTimer;
+function toast(t, ms = 6000) {
+  const el = $('#toast'); el.textContent = t; el.hidden = false; el.style.animation = 'none'; void el.offsetWidth; el.style.animation = '';
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => { el.hidden = true; }, ms);
+}
+const say = t => { notice(t); toast(t); };
 const notice = t => { const el = $('#notice'); if (el.textContent === t) return; el.textContent = t; el.style.animation = 'none'; void el.offsetWidth; el.style.animation = ''; };
 
 // ---------- server ----------
@@ -292,7 +300,7 @@ function refList() {
   wrap.append(h('ol', {className: 'ref-rows'}, ...rows.map(([n, r]) => {
     const have = inProject(r);
     return h('li', {}, h('span', {className: 'ref-num', textContent: n ? `[${n}]` : '·'}), h('div', {}, h('div', {className: 'ref-title', textContent: r.title || '(untitled)'}), h('div', {className: 'ref-meta', textContent: [authorsShort(r), r.year].filter(Boolean).join(' · ')})),
-      have ? h('button', {className: 'small', textContent: 'Open', onclick: () => { $('#info').close(); openPaper(have.id); }}) : h('button', {className: 'small', textContent: 'Add', onclick: e => getPdf(r, e.target)}));
+      have ? h('button', {className: 'small', textContent: 'Open', onclick: () => { $('#info').close(); openPaper(have.id); }}) : addButton(r, null, true));
   })));
   return wrap;
 }
@@ -832,7 +840,7 @@ function refItem(n, open) {
   if (open && rec.abstract) item.append(h('p', {className: 'ref-abstract', textContent: rec.abstract.slice(0, 420) + (rec.abstract.length > 420 ? '…' : '')}));
   const have = inProject(rec), actions = h('div', {className: 'ref-actions'});
   if (have) actions.append(h('button', {className: 'small primary', textContent: 'Open in Margin', onclick: () => { hideRefCard(); openPaper(have.id); }}));
-  else actions.append(h('button', {className: 'small primary', textContent: 'Add to project', title: 'Downloads an open-access copy if there is one; otherwise opens the publisher page to sign in', onclick: e => getPdf(rec, e.target)}));
+  else actions.append(addButton(rec));
   if (rec.doi) actions.append(h('a', {className: 'small-link', href: `https://doi.org/${rec.doi}`, target: '_blank', rel: 'noopener noreferrer', textContent: 'DOI ↗'}));
   item.append(actions);
   return item;
@@ -840,38 +848,46 @@ function refItem(n, open) {
 
 // Get a cited paper into the project: open-access copy, then (desktop) the sign-in window,
 // then (browser) the publisher page plus drag-and-drop.
+// The add button says what will happen: a direct add (open-access copy, or the desktop sign-in window),
+// or, in a browser without an open-access copy, opening the publisher page for a manual download.
+function addButton(rec, after, compact = false) {
+  const direct = !!(rec.pdfUrl || rec.oaUrl || window.marginDesktop);
+  return h('button', {className: 'small' + (compact ? '' : ' primary'), textContent: direct ? (compact ? 'Add' : 'Add to project') : (compact ? 'Publisher ↗' : 'Open publisher page ↗'),
+    title: rec.pdfUrl || rec.oaUrl ? 'Downloads the open-access copy into this project' : window.marginDesktop ? 'Opens the publisher page in a sign-in window; the PDF is added when it downloads' : 'No open-access copy: opens the publisher page in your browser. Download the PDF there and drag it onto Margin.',
+    onclick: async e => { await getPdf(rec, e.target); after?.(); }});
+}
 let pendingRef = null;
 async function getPdf(rec, button) {
   const label = button?.textContent; const busy = t => { if (button) { button.disabled = true; button.textContent = t; } };
   const done = () => { if (button) { button.disabled = false; button.textContent = label; } };
   const added = async (summary, how) => {
     await refreshProject(); refreshProjects(); hideRefCard();
-    notice(`Added “${(summary.meta?.title || summary.name).slice(0, 80)}” to ${project.name} (${how}). It is in the sidebar.`);
+    say(`Added “${(summary.meta?.title || summary.name).slice(0, 80)}” to ${project.name} (${how}). It is in the sidebar.`);
   };
   for (const url of [rec.pdfUrl, rec.oaUrl].filter(Boolean)) {
     busy('Downloading…');
     try { await added(await api(pathP('papers', 'from-url'), {body: {url, openalexId: rec.openalexId, doi: rec.doi}}), 'open-access copy'); return; } catch {}
   }
   const landing = rec.doi ? `https://doi.org/${rec.doi}` : rec.oaUrl || (rec.openalexId ? `https://openalex.org/${rec.openalexId}` : null);
-  if (!landing) { done(); notice('No link is known for this paper.'); return; }
+  if (!landing) { done(); say('No link is known for this paper.'); return; }
   if (window.marginDesktop) {
     const url = (session?.proxyPrefix || '') + landing;
     busy('Waiting for sign-in…');
-    notice('Sign in in the window that opened and download the PDF there; Margin adds it automatically. Close the window to cancel.');
+    say('Sign in in the window that opened and download the PDF there; Margin adds it automatically. Close the window to cancel.');
     const r = await window.marginDesktop.fetchWithLogin(url, rec.title || '');
     done();
-    if (!r?.ok) { notice(r?.reason === 'closed' ? 'Sign-in window closed; nothing was added.' : r?.reason || 'No PDF was downloaded.'); return; }
+    if (!r?.ok) { say(r?.reason === 'closed' ? 'Sign-in window closed; nothing was added.' : r?.reason || 'No PDF was downloaded.'); return; }
     try {
       const summary = await api(pathP('papers'), {body: r.bytes, headers: {'Content-Type': 'application/pdf', 'X-Filename': encodeURIComponent(r.filename || 'paper.pdf')}});
       if (!summary.meta) await api(`/api/papers/${summary.id}/metadata`, {body: rec.openalexId ? {openalexId: rec.openalexId} : {doi: rec.doi}}).catch(() => {});
       await added(summary, 'signed-in download');
-    } catch (e) { notice('Could not add the downloaded PDF: ' + e.message); }
+    } catch (e) { say('Could not add the downloaded PDF: ' + e.message); }
     return;
   }
   done();
   pendingRef = {rec, at: Date.now()};
   window.open(landing, '_blank', 'noopener');
-  notice('No open-access copy. The publisher page opened in a new tab: download the PDF there, then drag it onto Margin.');
+  say('No open-access copy. The publisher page opened in a new tab: download the PDF there, then drag it onto Margin.');
 }
 
 // Drag a PDF anywhere onto Margin to add it to the current project.
@@ -884,8 +900,8 @@ window.addEventListener('drop', async e => {
   if (!hasFiles(e)) return;
   e.preventDefault(); dragDepth = 0; $('#drop-zone').hidden = true;
   const file = [...e.dataTransfer.files].find(f => f.type === 'application/pdf' || /\.pdf$/i.test(f.name));
-  if (!file || !project || working || loading) { if (!file) notice('Only PDF files can be added.'); return; }
-  if (file.size > 60 * 1024 * 1024) { notice('Choose a PDF smaller than 60 MB.'); return; }
+  if (!file || !project || working || loading) { if (!file) say('Only PDF files can be added.'); return; }
+  if (file.size > 60 * 1024 * 1024) { say('Choose a PDF smaller than 60 MB.'); return; }
   try {
     const summary = await api(pathP('papers'), {body: new Uint8Array(await file.arrayBuffer()), headers: {'Content-Type': 'application/pdf', 'X-Filename': encodeURIComponent(file.name)}});
     // A PDF dropped soon after "Add to project" is taken to be that reference.
@@ -893,8 +909,8 @@ window.addEventListener('drop', async e => {
     // Only a PDF new to the library takes the reference's details; one already stored keeps its own.
     if (ref && !summary.meta) await api(`/api/papers/${summary.id}/metadata`, {body: ref.openalexId ? {openalexId: ref.openalexId} : {doi: ref.doi}}).catch(() => {});
     await refreshProject(); refreshProjects();
-    notice(`Added “${file.name}” to ${project.name}. Open it from the sidebar.`);
-  } catch (err) { notice('Could not add PDF: ' + err.message); }
+    say(`Added “${file.name}” to ${project.name}. Open it from the sidebar.`);
+  } catch (err) { say('Could not add PDF: ' + err.message); }
 });
 
 // ---------- citation map ----------
@@ -936,7 +952,7 @@ function showMapCard(n) {
   const kindText = {library: 'In this project', reference: 'Cited by your papers', citing: 'Cites your papers', both: 'Cited by and citing your papers'}[n.kind] + (n.degree >= 2 && n.kind !== 'library' ? ` · linked to ${n.degree} of your papers` : '');
   const actions = h('div', {className: 'ref-actions'});
   if (have) actions.append(h('button', {className: 'small primary', textContent: 'Open in Margin', onclick: () => { closeMap(); openPaper(have.id); }}));
-  else actions.append(h('button', {className: 'small primary', textContent: 'Add to project', onclick: async e => { await getPdf(n, e.target); if (inProject(n)) openMap(true); }}));
+  else actions.append(addButton(n, () => { if (inProject(n)) openMap(true); }));
   if (n.id && !n.id.startsWith('local:') && !n.expanded) actions.append(h('button', {className: 'small', textContent: 'Expand', title: 'Show this paper’s own references and citing papers', onclick: async e => {
     e.target.disabled = true; e.target.textContent = 'Loading…';
     try { map.expand(n.id, await api(`/api/works/${n.id}/neighbours`)); mapCounts(); e.target.remove(); } catch (err) { e.target.textContent = 'Failed'; notice(err.message); }
