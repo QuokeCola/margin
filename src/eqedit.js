@@ -18,6 +18,7 @@ const SOURCE_TEXT = {auto: 'detected', user: 'yours', ai: 'AI, accepted'};
 export function createEquationEditor(app) {
   const {h} = app, $ = s => document.querySelector(s);
   let on = false, selected = null, drag = null, editor = null, undo = [], run = null, keyBurst = 0;
+  const fresh = new Map(); // suggestion key -> order, for the reveal animation of new AI results
 
   const pageEl = n => document.querySelector(`.pdf-page[data-page="${n}"]`);
   const keyOf = f => f.suggest ? `ai?${f.label}` : `${f.source}:${f.label}:${f.page}`;
@@ -52,7 +53,8 @@ export function createEquationEditor(app) {
   }
   function frameEl(f) {
     const key = keyOf(f);
-    const d = h('div', {className: `eq-frame ${f.suggest ? 'suggest' : f.source}${selected === key ? ' selected' : ''}`, tabIndex: 0});
+    const d = h('div', {className: `eq-frame ${f.suggest ? 'suggest' : f.source}${selected === key ? ' selected' : ''}${fresh.has(key) ? ' reveal' : ''}`, tabIndex: 0});
+    if (fresh.has(key)) d.style.setProperty('--i', fresh.get(key));
     d.dataset.key = key;
     d.setAttribute('role', 'group');
     d.setAttribute('aria-label', f.suggest ? `AI suggestion: Eq. (${f.label}), page ${f.page}. Enter accepts, Delete rejects.`
@@ -291,6 +293,11 @@ export function createEquationEditor(app) {
         const snapped = r.equations.map(e => { const sb = snapBox(e.box, st.pageBoxes[p] || [], W, H, img, e.label); totals.snapped[sb.method]++; return {label: e.label, box: sb.box, raw: e.box}; });
         const m = mergeAiPage(p, snapped, st.auto[p] || [], st.overrides);
         for (const key of ['found', 'agree', 'suggested', 'kept']) totals[key] += m.stats[key];
+        // New suggestions on this page fade and wipe in one after another (once; later renders show them still).
+        const before = new Set(suggestions(st.overrides).map(g => g.label));
+        const added = suggestions(m.overrides).filter(g => !before.has(g.label) && g.page === p).sort((a, b) => a.box.y0 - b.box.y0);
+        added.forEach((g, i) => fresh.set(`ai?${g.label}`, i));
+        if (added.length) setTimeout(() => added.forEach(g => fresh.delete(`ai?${g.label}`)), 900 + added.length * 140);
         app.update(m.overrides); render(); updateBar(); done++;
         app.onPageLabelled?.(p, {equations: r.equations, snapped, stats: m.stats, usage: r.usage, model: r.model});
       } catch (e) {
