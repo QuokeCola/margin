@@ -11,7 +11,8 @@ import {lookupPaper, cleanDoi, worksById, searchWorks, workById, citingWorks, wo
 import {createIndexer, limiter} from './lib/project-index.mjs';
 import {projectContext, searchQuery} from './lib/retrieval.mjs';
 import {paperLabels} from './lib/labels.mjs';
-import {PROVIDERS, PROVIDER_NAMES, KEY_VARS, MODEL_VARS, ANTHROPIC_KEY_PATTERN, ANTHROPIC_FALLBACK_MODELS, providerOf, modelOf, createClient, listModels as listProviderModels, answerTurn} from './lib/llm.mjs';
+import {PROVIDERS, PROVIDER_NAMES, KEY_VARS, MODEL_VARS, ANTHROPIC_KEY_PATTERN, ANTHROPIC_FALLBACK_MODELS, providerOf, modelOf, createClient, listModels as listProviderModels, answerTurn, visionJSON, labelPrompt, LABEL_INSTRUCTIONS} from './lib/llm.mjs';
+import {cleanOverrides, migrateOverrides, parseAiEquations} from './lib/equations.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const ENV_FILE = process.env.MARGIN_ENV_FILE || join(root, '.env');
@@ -124,7 +125,7 @@ app.use('/api', (req, res, next) => {
   if (supplied.length !== token.length || !timingSafeEqual(supplied, Buffer.from(token))) return res.sendStatus(403);
   next();
 });
-app.use(express.json({limit: '4mb'})); // paper text (≤600k chars) + optional equation image (≤2 MB)
+app.use(express.json({limit: '4mb'})); // paper text (≤600k chars) + optional equation image (≤2 MB), or a page image (≤3 MB)
 
 app.get('/api/events', (req, res) => {
   res.writeHead(200, {'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', Connection: 'keep-alive', 'X-Accel-Buffering': 'no'});
@@ -284,7 +285,8 @@ app.get('/api/papers/:id', async (req, res) => {
   const stored = Date.parse(p.openedAt), at = now();
   p.openedAt = at;
   if (!(Date.now() - stored < OPENED_AT_GRANULARITY)) await store.savePaper(p);
-  res.json(p);
+  // Equation corrections in the current format (older {page, y} ones are read as frames; saved on the next change).
+  res.json({...p, overrides: migrateOverrides(p.overrides)});
 });
 app.get('/api/papers/:id/pdf', async (req, res) => {
   if (!ids(req, res)) return;
@@ -300,14 +302,44 @@ app.patch('/api/papers/:id', async (req, res) => {
   const {name, overrides} = req.body || {};
   if (name !== undefined) { p.name = cleanName(name, p.name); p.renamed = true; }
   if (overrides !== undefined) {
-    const ok = overrides && typeof overrides === 'object' && !Array.isArray(overrides) && Object.entries(overrides).length <= 2000 &&
-      Object.entries(overrides).every(([k, v]) => /^(?:\d{1,3}(?:\.\d{1,3})?|[A-Z]\.?\d{1,3})[a-z]?$/i.test(k) && Number.isInteger(v?.page) && v.page >= 1 && Number.isFinite(v?.y) && v.y >= 0 && v.y <= 1);
-    if (!ok) return res.status(400).json({error: 'Invalid corrections.'});
-    p.overrides = Object.fromEntries(Object.entries(overrides).map(([k, v]) => [k, {page: v.page, y: v.y}]));
+    // Equation frames (see lib/equations.mjs); old {page, y} corrections are accepted and converted.
+    const clean = cleanOverrides(overrides);
+    if (!clean) return res.status(400).json({error: 'Invalid corrections.'});
+    p.overrides = clean;
   }
   await store.savePaper(p);
-  res.json(p);
+  res.json({...p, overrides: migrateOverrides(p.overrides)});
 });
+// "Label equations with AI": one rendered page in, the numbered equations on it out ({label, box} with boxes
+// normalised to the page). Nothing is saved here; the app snaps the boxes to the page and stores what the
+// user accepts. Runs only when the user asks; the request is aborted when the app cancels.
+app.post('/api/papers/:id/label-equations', async (req, res) => {
+  if (!ids(req, res)) return;
+  const prov = provider(), apiKey = apiKeyOf(prov), used = model(prov);
+  if (!apiKey) return res.status(503).json({error: `Add your ${PROVIDER_NAMES[prov]} API key in Settings.`, fatal: true});
+  if (!(await store.loadPaper(req.params.id))) return res.status(404).json({error: 'Paper not found.', fatal: true});
+  const {page, pages, image, width, height} = req.body || {};
+  if (!Number.isInteger(page) || page < 1 || page > 300 || (pages !== undefined && (!Number.isInteger(pages) || pages < page || pages > 300)))
+    return res.status(400).json({error: 'Invalid page.'});
+  if (![width, height].every(v => Number.isInteger(v) && v >= 100 && v <= 4000)) return res.status(400).json({error: 'Invalid image size.'});
+  if (typeof image !== 'string' || image.length > 3_000_000 || !/^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(image))
+    return res.status(400).json({error: 'The page image is invalid or too large.'});
+  const abort = new AbortController();
+  res.on('close', () => { if (!res.writableEnded) abort.abort(); });
+  try {
+    const r = await visionJSON(prov, {apiKey, model: used, instructions: LABEL_INSTRUCTIONS, prompt: labelPrompt({page, pages, width, height}), image,
+      effort: process.env.MARGIN_LABEL_EFFORT || undefined, signal: abort.signal});
+    const equations = parseAiEquations(r.text, {width, height});
+    if (!equations) return res.status(502).json({error: r.truncated ? 'The answer was cut off before it was complete.' : 'The model did not return a list of equations.', usage: r.usage, model: r.model});
+    res.json({equations, usage: r.usage, model: r.model, provider: prov});
+  } catch (e) {
+    if (abort.signal.aborted) return;
+    const status = e.status;
+    if (!status && !e.refusal) console.error('Equation labelling failed:', e.message);
+    res.status(502).json({fatal: status === 401 || status === 404, error: e.refusal ? 'The model declined this page.' : status === 401 ? 'The API key was rejected. Update it in Settings.' : status === 429 ? `${PROVIDER_NAMES[prov]} quota or rate limit reached.` : status === 529 ? 'The model is overloaded right now.' : status === 404 ? `The model "${used}" is unavailable.` : status === 400 ? `The request was refused (${String(e.message || '').slice(0, 160)}). "${used}" may not read images.` : 'The request failed or timed out.'});
+  }
+});
+
 // Look up bibliographic metadata. The client sends DOI candidates and a title guess from the PDF;
 // a DOI typed by the user takes precedence. Misses are remembered so they are not retried on every open.
 app.post('/api/papers/:id/metadata', async (req, res) => {

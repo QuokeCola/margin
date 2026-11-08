@@ -9,8 +9,9 @@ export function parseReferences(text){
  return result;
 }
 export function resolveReference(ref,index,overrides,pageCount){
+ // A stored correction: an old {page, y} position, or an accepted frame {page, box} (see lib/equations.mjs).
  const custom=ref.equation&&overrides[ref.equation];
- if(custom)return {...custom,manual:true};
+ if(custom&&!custom.deleted&&custom.accepted!==false&&Number.isInteger(custom.page))return custom.box?{page:custom.page,y:custom.box.y0,box:custom.box,manual:true}:{...custom,manual:true};
  const candidates=ref.equation?(index[ref.equation]||[]):[];
  const match=candidates.find(c=>c.page===ref.page)||(candidates.length===1?candidates[0]:null);
  if(match)return match;

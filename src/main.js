@@ -13,6 +13,8 @@ import {parseBibliography, findMarkers, matchEntries} from './bib.js';
 import {clampZoom, wheelZoomFactor, zoomAnchor, pinchStep} from './zoom.js';
 import {applyTheme, getThemePref, setThemePref} from './theme.js';
 import {KEY_ART, CLAUDE_KEY_ART, EXT_ART} from './guides.js';
+import {mergeEquations, legacyBox, normalizeLabel} from '../lib/equations.mjs';
+import {createEquationEditor} from './eqedit.js';
 import {LABEL, COMPANY, providerOf, connectionText, composeHint, webTitle, searchNote, keyHint, settingsBody, savingText} from './providers.js';
 pdfjs.GlobalWorkerOptions.workerSrc = worker;
 applyTheme();
@@ -30,7 +32,7 @@ $('#app').innerHTML = `<header><button id="toggle-library" class="icon" title="S
 <div class="lib-section"><div class="lib-head"><small>PAPERS</small><label class="file-button small">+ Add PDF<input id="file" type="file" accept="application/pdf"></label></div><ul id="papers" aria-label="Papers"></ul></div>
 <div class="lib-section"><div class="lib-head"><small>CHATS</small><button id="new-chat-side" class="small" title="New chat: about the open paper, or the whole project">+ New</button></div><ul id="chats" aria-label="Chats"></ul></div></aside>
 <section class="chat"><div class="section-head"><div><small id="chat-paper">YOUR STUDY DESK</small><h1 id="chat-title">Read. Question. Understand.</h1></div><button id="new-chat" disabled>New chat</button></div><div id="messages" tabindex="0" aria-label="Conversation"></div><form id="ask"><div id="context" hidden></div><textarea id="question" aria-label="Question about the paper" placeholder="What would you like to understand?" rows="3" maxlength="8000"></textarea><div class="compose-bottom"><span id="compose-hint">Enter to send · Ctrl+Enter for a new line.</span><div class="compose-actions"><button type="button" id="web-toggle" class="web-toggle" aria-pressed="false" title="Let the answer search the web (billed per search). Off by default.">⌕ Web</button><button id="send" type="submit">Ask ↗</button></div></div></form><p id="notice" role="status">Add a PDF, or pick one from the library.</p></section>
-<section class="reader"><div class="section-head"><div><small>SOURCE DOCUMENT</small><h2 id="filename">Your paper, in context</h2><p id="paper-byline"></p></div><button id="paper-info" class="small" disabled title="Paper details: authors, venue, DOI, abstract">ⓘ Info</button></div><div class="toolbar"><label><input id="follow" type="checkbox" checked> Follow chat</label><div><label>Page <input id="page" type="number" min="1" value="1"></label><span id="total">/ —</span><button id="go">Go</button></div><button id="marker" title="Marker: drag a box over any part of the page to ask about it (Esc to cancel)" aria-pressed="false">✎ Mark</button><div class="zoom" title="Pinch the trackpad (or Ctrl + scroll) over the page to zoom"><button id="zoom-out" aria-label="Zoom out">−</button><button id="zoom-reset" title="Reset to 100%">100%</button><button id="zoom-in" aria-label="Zoom in">+</button></div></div><div id="pdf"><div class="empty"><div class="paper-icon">∑</div><h2>Make room for the original.</h2><p>Add a PDF from your laptop, or pick a paper from the library.<br>Pinch the trackpad over a page to zoom.</p></div></div><details id="manual"><summary>Find a reference / correct an equation location</summary><div class="manual-grid"><label>Equation <input id="equation" placeholder="61"></label><label>PDF page <input id="map-page" type="number" min="1" value="1"></label><label>Position from top (%) <input id="map-y" type="number" min="0" max="100" value="50"></label><button id="find">Find equation</button><button id="save">Save correction</button><button id="remove">Remove correction</button></div><p>Corrections are saved with this paper in your library. Click the PDF while this panel is open to pick a position. Pages use PDF order, not printed journal numbers.</p></details></section>
+<section class="reader"><div class="section-head"><div><small>SOURCE DOCUMENT</small><h2 id="filename">Your paper, in context</h2><p id="paper-byline"></p></div><button id="paper-info" class="small" disabled title="Paper details: authors, venue, DOI, abstract">ⓘ Info</button></div><div class="toolbar"><label><input id="follow" type="checkbox" checked> Follow chat</label><div><label>Page <input id="page" type="number" min="1" value="1"></label><span id="total">/ —</span><button id="go">Go</button></div><button id="marker" title="Marker: drag a box over any part of the page to ask about it (Esc to cancel)" aria-pressed="false">✎ Mark</button><button id="eq-edit" title="Edit equations: show every equation frame, draw, move, resize, relabel or delete frames, or label them with AI (Esc to finish)" aria-pressed="false">∑ Edit equations</button><div class="zoom" title="Pinch the trackpad (or Ctrl + scroll) over the page to zoom"><button id="zoom-out" aria-label="Zoom out">−</button><button id="zoom-reset" title="Reset to 100%">100%</button><button id="zoom-in" aria-label="Zoom in">+</button></div></div><div id="eq-bar" hidden role="region" aria-label="Edit equations"><div class="eq-bar-row"><p class="eq-bar-hint"><b>Editing equations.</b> Drag on the page to frame an equation · select a frame to move it, resize it by its handles, relabel it (double-click) or delete it (Delete) · Ctrl+Z undoes · Esc finishes</p><div class="eq-bar-actions"><select id="eq-ai-scope" aria-label="Pages to label with AI"><option value="page">This page</option><option value="all">Whole paper</option></select><button id="eq-ai" title="Send page images to the AI provider to find numbered equations; results are suggestions">✦ Label with AI…</button><button id="eq-accept-all" hidden></button><button id="eq-reject-all" hidden>Reject all</button><button id="eq-done" class="primary">Done</button></div></div><div id="eq-progress" hidden><progress max="1" value="0"></progress><span></span><button id="eq-cancel">Cancel</button></div><p id="eq-msg" role="status"></p></div><div id="pdf"><div class="empty"><div class="paper-icon">∑</div><h2>Make room for the original.</h2><p>Add a PDF from your laptop, or pick a paper from the library.<br>Pinch the trackpad over a page to zoom.</p></div></div><details id="manual"><summary>Find a reference / correct an equation location</summary><div class="manual-grid"><label>Equation <input id="equation" placeholder="61"></label><label>PDF page <input id="map-page" type="number" min="1" value="1"></label><label>Position from top (%) <input id="map-y" type="number" min="0" max="100" value="50"></label><button id="find">Find equation</button><button id="save">Save correction</button><button id="remove">Remove correction</button></div><p>Corrections are saved with this paper in your library. Click the PDF while this panel is open to pick a position. Pages use PDF order, not printed journal numbers. For an exact frame, use ∑ Edit equations in the toolbar.</p></details></section>
 <section id="map-view" hidden aria-label="Citation map"><div class="map-bar"><button id="map-back">← Back to reading</button><div class="map-title"><small>CITATION MAP</small><h2 id="map-project"></h2></div>
 <div class="map-filters"><label><input type="checkbox" id="mf-refs" checked> <i class="dot k-reference"></i>References</label><label><input type="checkbox" id="mf-citing" checked> <i class="dot k-citing"></i>Citing papers</label><label title="Only papers linked to two or more of your papers"><input type="checkbox" id="mf-shared"> Only shared</label><label><input type="checkbox" id="mf-year"> Arrange by year</label><button id="map-fit" class="small" title="Fit the map to the window">Fit</button><button id="map-refresh" class="small" title="Fetch references and citations again">↻</button></div></div>
 <div class="map-body"><svg id="map-svg" role="img" aria-label="Citation graph"></svg><div class="map-legend"><span><i class="dot k-library"></i>In this project</span><span><i class="dot k-reference"></i>Cited by your papers</span><span><i class="dot k-citing"></i>Cites your papers</span><span><i class="dot k-both"></i>Both</span><span class="hint">Arrows point to the cited paper · size = citations · drag to move, scroll to zoom</span></div><p id="map-status" role="status"></p><aside id="map-card" hidden></aside></div></section></main>
@@ -58,7 +60,7 @@ $('#app').innerHTML = `<header><button id="toggle-library" class="icon" title="S
 
 let session = null, models = [], projects = [], project = null, paper = null, chat = null; // project: {id, name, papers, chats}
 let doc = null, pages = [], index = {}, overrides = {};
-let pageBoxes = {}, eqByPage = {}, quotePages = {}, context = null; // quotePages: pages prepared for quote search
+let pageBoxes = {}, autoByPage = {}, eqByPage = {}, quotePages = {}, context = null; // eqByPage/index: detected equations merged with the user's frames (rebuildEquations) // quotePages: pages prepared for quote search
 let bib = {start: null, entries: new Map()}, refHits = {}, refRecords = [], refByNum = new Map(), refsState = 'idle'; // references of the open paper // text-item geometry and detected equations per page; pending attachment
 let working = false, loading = false, generation = 0, activeRef = null, renderQueue = Promise.resolve();
 let chatShown = 0; // which showChat/showWelcome is current (older messages are added in the background)
@@ -85,10 +87,10 @@ async function api(path, opts = {}) {
   const headers = {'X-Session-Token': session?.token || '', 'X-Margin-Client': CLIENT_ID, ...opts.headers};
   let body = opts.body;
   if (body !== undefined && !(body instanceof Uint8Array)) { body = JSON.stringify(body); headers['Content-Type'] = 'application/json'; }
-  const r = await fetch(path, {method: opts.method || (body ? 'POST' : 'GET'), headers, body});
+  const r = await fetch(path, {method: opts.method || (body ? 'POST' : 'GET'), headers, body, signal: opts.signal});
   if (opts.binary) { if (!r.ok) throw Error(`Could not load the PDF (${r.status}).`); return new Uint8Array(await r.arrayBuffer()); }
   const data = r.status === 204 ? null : await r.json().catch(() => ({}));
-  if (!r.ok) throw Error(data?.error || `Request failed (${r.status}).`);
+  if (!r.ok) throw Object.assign(Error(data?.error || `Request failed (${r.status}).`), {status: r.status, data});
   return data;
 }
 
@@ -293,11 +295,11 @@ $('#project-delete').onclick = () => project && deleteProject(project.id);
 
 // In-app confirmation (window.confirm is not used in the app); resolves true when confirmed.
 // body: paragraphs, each a string or element props; Cancel has the focus, Esc cancels.
-function confirmBox({title, body, ok}) {
+function confirmBox({title, body, ok, primary = false}) {
   const d = $('#confirm');
   $('#confirm-title').textContent = title;
   $('#confirm-body').replaceChildren(...body.filter(Boolean).map(t => h('p', typeof t === 'string' ? {textContent: t} : t)));
-  $('#confirm-ok').textContent = ok;
+  $('#confirm-ok').textContent = ok; $('#confirm-ok').className = primary ? 'primary' : 'danger';
   d.showModal(); $('#confirm-cancel').focus();
   return new Promise(resolve => {
     const done = v => { if (d.open) d.close(); $('#confirm-form').onsubmit = $('#confirm-cancel').onclick = d.oncancel = null; resolve(v); };
@@ -594,7 +596,8 @@ async function closePaper({keepChat = false} = {}) {
   await renderQueue.catch(() => {});
   await destroyDoc();
   if (!keepChat) chat = null;
-  doc = null; paper = null; pages = []; index = {}; overrides = {}; activeRef = null; pageBoxes = {}; eqByPage = {}; quotePages = {}; setContext(null); hidePop(); setMarking(false); hideRefCard();
+  eqEditor.reset();
+  doc = null; paper = null; pages = []; index = {}; overrides = {}; activeRef = null; pageBoxes = {}; autoByPage = {}; eqByPage = {}; quotePages = {}; setContext(null); hidePop(); setMarking(false); hideRefCard();
   bib = {start: null, entries: new Map()}; refHits = {}; refRecords = []; refByNum = new Map(); refsState = 'idle';
   endPinch(false); pageObserver.disconnect(); nearPages.clear();
   $('#pdf').replaceChildren(h('div', {className: 'empty', innerHTML: '<div class="paper-icon">∑</div><h2>Make room for the original.</h2><p>Add a PDF from your laptop, or pick a paper from the library.</p>'}));
@@ -649,18 +652,16 @@ async function openPaper(id, bytes, chatId, {keepChat = isProjectChat(chat) && !
       pages.push({page: n, text: items.map(t => t.str + (t.hasEOL ? '\n' : ' ')).join('')});
       const boxes = textBoxes(items, vp, pdfjs.Util); // used for equation frames and quotes
       pageBoxes[n] = boxes;
-      for (const e of detectEquations(boxes, vp.width, vp.height)) {
-        const entry = {page: n, y: e.box.y0, x: e.labelBox.x0, box: e.box, label: e.label};
-        (index[e.label] ??= []).push(entry); (eqByPage[n] ??= []).push(entry);
-      }
+      autoByPage[n] = detectEquations(boxes, vp.width, vp.height).map(e => ({page: n, y: e.box.y0, x: e.labelBox.x0, box: e.box, label: e.label}));
       const el = h('div', {className: 'pdf-page'}, h('span', {className: 'page-badge', textContent: n}));
       el.dataset.page = n; el.dataset.width = vp.width; el.dataset.height = vp.height; sizePage(el);
       $('#pages').append(el); pageObserver.observe(el);
     }
+    rebuildEquations();
     const mine = project.chats.filter(c => !isProjectChat(c) && c.paperId === id), pick = mine.find(c => c.id === chatId) || mine[0];
     if (keepChat && chat) showPaperHeader();
     else if (pick) showChat(await api(pathP('chats', pick.id))); else { loading = false; await newChat(); }
-    notice(`Ready · ${pages.length} pages · ${Object.keys(index).length} detected equations. ${pages.every(p => !p.text.trim()) ? 'No text detected: OCR this PDF before asking questions.' : ''}`);
+    notice(`Ready · ${pages.length} pages · ${Object.keys(index).length} equations. ${pages.every(p => !p.text.trim()) ? 'No text detected: OCR this PDF before asking questions.' : ''}`);
     indexReferences(); if (paper.meta) loadReferences(); else maybeLookup();
   } catch (err) { await destroyDoc(); notice('Could not open PDF: ' + err.message); }
   finally { loading = false; controls(); renderLibrary(); }
@@ -806,16 +807,16 @@ async function navigate(ref, {switchPaper = true} = {}) {
   }
   if (!doc) return;
   if (ref.quote) return navigateQuote(ref);
-  const target = resolveReference(ref, index, overrides, doc.numPages);
+  const target = resolveReference(ref, index, {}, doc.numPages); // index already holds the user's frames
   if (!target) { notice('Equation location is missing or ambiguous. Use the correction panel to choose its page and position.'); $('#manual').open = true; $('#equation').value = ref.equation || ''; return; }
   activeRef = ref;
   const el = $(`.pdf-page[data-page="${target.page}"]`);
   await queueRender(el, true);
-  const box = target.manual ? null : target.box;
-  const mark = h('div', {className: 'highlight' + (box ? ' eq' : target.y == null ? ' whole' : ''), title: target.manual ? 'Manually corrected location' : target.y == null ? 'Page citation' : 'Detected equation; verify against source'});
+  const box = target.box, mine = target.source === 'user' || target.source === 'ai';
+  const mark = h('div', {className: 'highlight' + (box ? ' eq' : target.y == null ? ' whole' : ''), title: mine ? (target.source === 'ai' ? 'Frame labelled by AI and accepted by you' : 'Frame you set') : target.y == null ? 'Page citation' : 'Detected equation; verify against source'});
   if (box) placeBox(mark, box); else mark.style.top = target.y == null ? '0' : Math.max(0, target.y * 100 - 3) + '%';
   showMarks(el, [mark], box?.y0 ?? target.y ?? 0, target.page);
-  notice(`${ref.equation ? 'Equation ' + ref.equation + ' · ' : ''}PDF page ${target.page}${target.manual ? ' · manual correction' : target.fallback ? ' · exact equation not located; showing page' : box ? ' · detected equation (verify visually)' : ''}`);
+  notice(`${ref.equation ? 'Equation ' + ref.equation + ' · ' : ''}PDF page ${target.page}${target.source === 'user' ? ' · your frame' : target.source === 'ai' ? ' · AI-labelled frame' : target.fallback ? ' · exact equation not located; showing page' : box ? ' · detected equation (verify visually)' : ''}`);
 }
 function placeBox(div, b) { Object.assign(div.style, {left: b.x0 * 100 + '%', top: b.y0 * 100 + '%', width: (b.x1 - b.x0) * 100 + '%', height: (b.y1 - b.y0) * 100 + '%'}); }
 // Jumps longer than JUMP_SMOOTH_SCREENS view heights are instant (a smooth scroll would pass,
@@ -1070,17 +1071,30 @@ try { if (localStorage.getItem('margin-library-hidden')) document.body.classList
 // ---------- corrections ----------
 $('#go').onclick = () => navigate({page: Number($('#page').value)});
 $('#find').onclick = () => navigate({equation: $('#equation').value.trim()});
-async function persist() {
-  try { overrides = (await api(`/api/papers/${paper.id}`, {method: 'PATCH', body: {overrides}})).overrides; return true; }
-  catch (e) { notice('Could not save the correction: ' + e.message); return false; }
+// Saves run one after another, each sending the corrections as they are when it starts.
+let saving = Promise.resolve(true);
+function persist() {
+  const id = paper.id;
+  return saving = saving.then(async () => {
+    if (paper?.id !== id) return false;
+    try { await api(`/api/papers/${id}`, {method: 'PATCH', body: {overrides}}); return true; }
+    catch (e) { notice('Could not save the equation frames: ' + e.message); return false; }
+  });
 }
+// The equation set every view uses: detections, minus deleted ones, with the user's frames in their place.
+function rebuildEquations() { ({byPage: eqByPage, index} = mergeEquations(autoByPage, overrides)); }
+function setOverrides(next) { overrides = next; rebuildEquations(); return persist(); }
 $('#save').onclick = async () => {
   const eq = $('#equation').value.trim(), page = Number($('#map-page').value), pct = Number($('#map-y').value);
-  if (!doc || !/^(?:\d{1,3}(?:\.\d{1,3})?|[A-Z]\.?\d{1,3})[a-z]?$/i.test(eq) || !Number.isInteger(page) || page < 1 || page > doc.numPages || !Number.isFinite(pct) || pct < 0 || pct > 100) { notice('Enter an equation number, valid PDF page, and position from 0–100%.'); return; }
-  overrides[eq] = {page, y: pct / 100};
-  if (await persist()) navigate({equation: eq});
+  if (!doc || !normalizeLabel(eq) || !Number.isInteger(page) || page < 1 || page > doc.numPages || !Number.isFinite(pct) || pct < 0 || pct > 100) { notice('Enter an equation number, valid PDF page, and position from 0–100%.'); return; }
+  const label = normalizeLabel(eq);
+  if (await setOverrides({...overrides, [label]: {page, box: legacyBox(pct / 100), source: 'user', accepted: true}})) { eqEditor.refresh(); navigate({equation: label}); }
 };
-$('#remove').onclick = async () => { if (!paper) return; delete overrides[$('#equation').value.trim()]; if (await persist()) notice('Correction removed. Automatic detection will be used.'); };
+$('#remove').onclick = async () => {
+  if (!paper) return;
+  const next = {...overrides}; delete next[normalizeLabel($('#equation').value) || $('#equation').value.trim()];
+  if (await setOverrides(next)) { eqEditor.refresh(); notice('Correction removed. Automatic detection will be used.'); }
+};
 // ---------- PDF interaction: corrections, text selection, equations ----------
 function pageHit(e) {
   const el = e.target.closest?.('.pdf-page'); if (!el) return null;
@@ -1106,7 +1120,7 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') hidePop(); }
 
 for (const ev of ['pointerup', 'blur']) (ev === 'blur' ? window : document).addEventListener(ev, () => document.querySelectorAll('.textLayer.selecting').forEach(l => l.classList.remove('selecting')));
 $('#pdf').addEventListener('mouseup', e => {
-  if ($('#manual').open || e.button !== 0 || marking || Date.now() - markedAt < 400) return;
+  if ($('#manual').open || e.button !== 0 || marking || eqEditor.on || Date.now() - markedAt < 400) return;
   setTimeout(() => {
     const sel = getSelection(), text = sel.toString().replace(/\s+/g, ' ').trim();
     const el = sel.anchorNode?.parentElement?.closest('.pdf-page');
@@ -1130,7 +1144,7 @@ $('#pdf').addEventListener('mousemove', e => {
   if (hoverFrame) return;
   hoverFrame = requestAnimationFrame(() => {
     hoverFrame = 0;
-    const hit = $('#manual').open || marking || e.buttons ? null : pageHit(e);
+    const hit = $('#manual').open || marking || eqEditor.on || e.buttons ? null : pageHit(e);
     const old = document.querySelector('.eq-hover'), target = hit?.ref || hit?.eq;
     if (!target) { old?.remove(); document.querySelectorAll('.eq-hot').forEach(x => x.classList.remove('eq-hot')); return; }
     if (old?.eq === target) return;
@@ -1141,7 +1155,7 @@ $('#pdf').addEventListener('mousemove', e => {
 });
 $('#pdf').addEventListener('mouseleave', () => { document.querySelector('.eq-hover')?.remove(); });
 $('#pdf').onclick = e => {
-  if (!$('#manual').open) return;
+  if (!$('#manual').open || eqEditor.on) return;
   const el = e.target.closest('.pdf-page'); if (!el) return;
   $('#map-page').value = el.dataset.page;
   $('#map-y').value = Math.round((e.clientY - el.getBoundingClientRect().top) / el.clientHeight * 100);
@@ -1412,11 +1426,47 @@ function showMapCard(n) {
   card.hidden = false;
 }
 
+// ---------- equation frames: edit mode and AI labelling (src/eqedit.js) ----------
+const PAGE_IMAGE_PX = 1600; // long side of page images sent for AI labelling
+async function pageImageSize(n) {
+  const vp = (await doc.getPage(n)).getViewport({scale: 1}), k = PAGE_IMAGE_PX / Math.max(vp.width, vp.height);
+  return {width: Math.round(vp.width * k), height: Math.round(vp.height * k)};
+}
+// A whole page rendered for the model (white background), with its grey values for snapping frames to ink.
+async function pageImage(n) {
+  const page = await doc.getPage(n), base = page.getViewport({scale: 1}), vp = page.getViewport({scale: PAGE_IMAGE_PX / Math.max(base.width, base.height)});
+  const canvas = h('canvas', {width: Math.round(vp.width), height: Math.round(vp.height)}), c = canvas.getContext('2d', {willReadFrequently: true});
+  c.fillStyle = '#fff'; c.fillRect(0, 0, canvas.width, canvas.height);
+  await page.render({canvasContext: c, viewport: vp}).promise;
+  const px = c.getImageData(0, 0, canvas.width, canvas.height).data, gray = new Uint8Array(canvas.width * canvas.height);
+  for (let i = 0; i < gray.length; i++) gray[i] = (px[4 * i] * 77 + px[4 * i + 1] * 151 + px[4 * i + 2] * 28) >> 8;
+  let dataUrl = canvas.toDataURL('image/png');
+  if (dataUrl.length > 2_500_000) dataUrl = canvas.toDataURL('image/jpeg', 0.9); // stay under the server's 3 MB limit
+  return {dataUrl, width: canvas.width, height: canvas.height, gray};
+}
+// The page at the middle of the reader's view.
+function currentPage() {
+  const v = $('#pdf').getBoundingClientRect(), mid = v.top + v.height / 2;
+  let best = 1, dist = Infinity;
+  for (const el of document.querySelectorAll('.pdf-page')) {
+    const r = el.getBoundingClientRect(), d = r.top <= mid && r.bottom >= mid ? 0 : Math.min(Math.abs(r.top - mid), Math.abs(r.bottom - mid));
+    if (d < dist) { dist = d; best = Number(el.dataset.page); }
+  }
+  return best;
+}
+const eqEditor = createEquationEditor({
+  pdf: $('#pdf'), h, notice, api, confirmBox, pageImage, pageImageSize, currentPage,
+  state: () => ({paper, doc, overrides, auto: autoByPage, byPage: eqByPage, pageBoxes}),
+  update: next => { setOverrides(next); },
+  providerInfo: () => ({provider: providerOf(session), company: COMPANY[providerOf(session)], model: session?.model, configured: !!session?.configured}),
+  onMode: on => { if (on) { setMarking(false); hidePop(); document.querySelector('.eq-hover')?.remove(); notice('Editing equations: drag on the page to frame one; select a frame to move, resize, relabel or delete it. Esc finishes.'); } },
+});
+
 // ---------- marker: drag a box over any area of the page ----------
 let marking = false, draft = null, markedAt = 0;
 function setMarking(on) {
   marking = on; $('#pdf').classList.toggle('marking', on); $('#marker').classList.toggle('active', on); $('#marker').setAttribute('aria-pressed', on);
-  if (on) { hidePop(); notice('Marker: drag a box over the part of the page you want to ask about. Esc cancels.'); }
+  if (on) { eqEditor.setMode(false); hidePop(); notice('Marker: drag a box over the part of the page you want to ask about. Esc cancels.'); }
   if (!on && draft) { draft.div.remove(); draft = null; }
 }
 $('#marker').onclick = () => setMarking(!marking);
