@@ -95,8 +95,17 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       // "View PDF". Do that once per paper in the tab Margin opened, with the page's own link; the PDF
       // response is caught below.
       await loaded;
-      const best = msg.info.candidates.find(u => /md5=|pid=/.test(u)) || msg.info.candidates[0];
-      if (best && !state.navigated[req.id] && tabRequests.get(sender.tab.id) === req.id && !msg.info.isPdf) {
+      if (state.navigated[req.id] || tabRequests.get(sender.tab.id) !== req.id || msg.info.isPdf) return;
+      let host = ''; try { host = new URL(msg.info.url).hostname; } catch {}
+      // On sites that need a navigation, only the page's own signed PDF link is acceptable; until it
+      // appears (pages render it late) wait for the next report, then ask the user to click it.
+      const strict = NAVIGATE_ONLY.test(host);
+      const best = strict ? msg.info.candidates.find(u => /md5=|pid=/.test(u)) : msg.info.candidates[0];
+      if (!best) {
+        if (strict) chrome.tabs.sendMessage(sender.tab.id, {type: 'banner', text: 'Margin is waiting for this paper: click “View PDF” and it will be added to your project.'}, () => void chrome.runtime.lastError);
+        return;
+      }
+      {
         state.navigated[req.id] = true; save();
         // Follow the link from inside the page (keeps the referrer); fall back to a plain navigation.
         chrome.tabs.sendMessage(sender.tab.id, {type: 'open-from-page', url: best}, r => {

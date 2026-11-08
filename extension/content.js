@@ -27,9 +27,7 @@ function collect() {
   if (/(^|\.)iopscience\.iop\.org$/.test(host) && d) add(`https://iopscience.iop.org/article/${d}/pdf`);
   const late = []; // constructed links, tried only after the page's own links
   if (/(^|\.)sciencedirect\.com$/.test(host)) {
-    const pii = (path.match(/\/pii\/([A-Z0-9]+)/i) || [])[1];
-    add(meta('citation_pdf_url'));
-    if (pii) late.push(`https://www.sciencedirect.com/science/article/pii/${pii}/pdfft?isDTMRedir=true&download=true`);
+    add(meta('citation_pdf_url')); // only the page's own signed link: constructed pdfft links are rejected
   }
   add(meta('citation_pdf_url'));
   add(meta('eprints.document_url'));
@@ -59,6 +57,7 @@ function collect() {
 }
 chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   if (msg?.type === 'collect') reply(collect());
+  if (msg?.type === 'banner') { banner(msg.text); reply({ok: true}); }
   // Open a PDF link from inside the page, so the request carries this page as its referrer, the way a
   // click on the site's own "View PDF" does (some publishers reject the link opened from outside).
   if (msg?.type === 'open-from-page') {
@@ -68,6 +67,17 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   }
 });
 chrome.runtime.sendMessage({type: 'page', info: collect()}).catch(() => {});
-// Some sites (IEEE, ScienceDirect) fill in links after load: report once more shortly after.
-setTimeout(() => chrome.runtime.sendMessage({type: 'page', info: collect()}).catch(() => {}), 2500);
+// Some sites (IEEE, ScienceDirect) fill in links after load: report again shortly after.
+for (const ms of [2500, 6000]) setTimeout(() => chrome.runtime.sendMessage({type: 'page', info: collect()}).catch(() => {}), ms);
+
+// Shown when Margin is waiting for this paper but the PDF has to be opened by hand.
+function banner(text) {
+  if (document.getElementById('margin-connector-banner')) return;
+  const b = document.createElement('div');
+  b.id = 'margin-connector-banner';
+  b.textContent = text;
+  Object.assign(b.style, {position: 'fixed', zIndex: 2147483647, right: '16px', bottom: '16px', maxWidth: '360px', padding: '10px 14px', background: '#203c39', color: '#f4f6f1', font: '13px/1.45 system-ui, sans-serif', borderRadius: '10px', boxShadow: '0 10px 30px rgba(0,0,0,.25)', cursor: 'pointer'});
+  b.onclick = () => b.remove();
+  document.documentElement.append(b);
+}
 })();
