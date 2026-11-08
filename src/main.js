@@ -638,7 +638,7 @@ async function openPaper(id, bytes, chatId, {keepChat = isProjectChat(chat) && !
     } catch {}
     showPaperHeader(); renderLibrary();
     $('#pdf').replaceChildren(h('div', {id: 'pages'})); // the page column (scaled as a whole during a pinch)
-    doc = await pdfjs.getDocument({data: bytes}).promise;
+    doc = await pdfjs.getDocument({data: bytes, wasmUrl: new URL('pdfjs-wasm/', location.href).href}).promise;
     if (doc.numPages > 300) throw Error('This reader supports up to 300 pages.');
     $('#total').textContent = '/ ' + doc.numPages; $('#page').max = doc.numPages; $('#map-page').max = doc.numPages;
     for (let n = 1; n <= doc.numPages; n++) {
