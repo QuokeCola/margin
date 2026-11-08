@@ -40,7 +40,7 @@ Get the latest build from **[Releases](https://github.com/QuokeCola/margin/relea
 | **Click an equation in the PDF to ask about it** | **The equation is attached as an image** |
 | ![Ask AI button over an equation in the PDF](docs/images/ask-equation.png) | ![Equation image attached to the question](docs/images/equation-attached.png) |
 
-<!-- Screenshot needed: "✎ Mark" box drawn over a figure with the "Ask AI about this area ↗" button (docs/images/mark-area.png). -->
+![A ✎ Mark box drawn over a figure in the PDF, with the Ask AI about this area button](docs/images/mark-area.png)
 
 ### Projects, papers and references
 
@@ -48,7 +48,7 @@ Get the latest build from **[Releases](https://github.com/QuokeCola/margin/relea
 - **Paper details** (title, authors, venue, date, DOI, abstract, citation counts) come from OpenAlex, with Crossref as a fallback. **ⓘ Info** shows them and lets you fix the DOI.
 - **Clickable references.** Numbered citations in the PDF (“[12]”, “[3, 7]”, “[21]–[23]”) open a card with the cited paper's details and abstract, plus **Open in Margin** or **Add to project**. **ⓘ Info** lists all references with the same actions.
 
-<!-- Screenshot needed: reference card opened from a "[12]" marker in the PDF, showing title/abstract and "Add to project" (docs/images/reference-card.png). -->
+![Reference card opened from a [1] marker in the PDF, with the cited paper's title, authors, abstract and Add to project](docs/images/reference-card.png)
 
 ### Citation map
 
@@ -59,7 +59,7 @@ Get the latest build from **[Releases](https://github.com/QuokeCola/margin/relea
 - **Arrange by year** turns it into a timeline;
 - click a paper for **Open in Margin**, **Add to project** or **Expand** (pull in its own references and citers).
 
-<!-- Screenshot needed: citation map of a small project, ideally one with "Arrange by year" on (docs/images/citation-map.png). -->
+![Citation map of a seven-paper project: project papers in green, cited works in amber, citing works in blue, shared ones in purple](docs/images/citation-map.png)
 
 ### Chats about the whole project
 
@@ -71,7 +71,9 @@ Get the latest build from **[Releases](https://github.com/QuokeCola/margin/relea
 
 **⌕ Web** in the composer lets an answer use OpenAI web search; the pages used are listed under the answer. It is off at every launch, works in both chat types, and is billed per search by OpenAI.
 
-<!-- Screenshot needed: a Whole-project answer with chips from two different papers, and a Web answer with its source list (docs/images/project-chat.png). -->
+![Whole-project answer with citation chips from three different papers; the selected chip opened its paper with the quoted words highlighted](docs/images/project-chat.png)
+
+<img src="docs/images/project-chat-web.png" width="480" alt="Answer with web search on, ending with its list of web sources">
 
 ### Getting PDFs
 
@@ -102,7 +104,7 @@ The extension in the `extension/` folder lets **Add to project** use your everyd
 
 **Privacy:** the extension acts automatically only for papers Margin asked for (or when you click **Send**), reads only the page's DOI, title and PDF links, and talks only to Margin on `127.0.0.1`. It looks for Margin on port 47317 (desktop app) and 4317 (`npm run dev`).
 
-<!-- Screenshot needed: Settings → Browser extension box with folder and pairing code, next to the extension popup showing "Connected to Margin" (docs/images/extension.png). -->
+<img src="docs/images/extension.png" width="460" alt="Settings → Browser extension: setup steps with the folder to load, the pairing code and a guide drawing">
 
 ### Settings
 
@@ -112,11 +114,11 @@ The extension in the `extension/` folder lets **Add to project** use your everyd
 - **Browser extension**: folder and pairing code.
 - **Theme**: System, Light or Dark.
 
-![Settings with API key setup steps and model choice](docs/images/settings.png)
+<img src="docs/images/settings.png" width="540" alt="Settings: OpenAI API key with its setup guide drawing, library proxy prefix, browser extension, model and theme">
 
-<!-- Screenshot needed: refresh settings.png (it predates the proxy, extension and theme options), and add a dark-mode view of the reader (docs/images/dark.png). -->
+![Dark mode: a chat with citation chips beside the PDF, with the cited words highlighted](docs/images/dark.png)
 
-The screenshots use an original demo paper (`docs/demo/paper.html`).
+The demo GIF uses an original demo paper (`docs/demo/paper.html`).
 
 ## Run from source
 
