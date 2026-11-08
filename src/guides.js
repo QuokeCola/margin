@@ -53,3 +53,38 @@ ${mBadge(66, 51, 9)}<path class="g-text strong" d="M80 55.5H106"/><path class="g
 <g class="key-save"><rect class="g-primary" x="114" y="80" width="26" height="8" rx="3"/><path class="g-on-primary" d="M120 84H134"/></g></g>
 ${ripples('key-r', [[56, 33.5], [91, 46], [16, 32], [77.5, 28.5], [100, 71], [127, 84]])}
 ${cursor('key-cursor')}</g></svg>`;
+
+// Anthropic key (Claude Console): Settings → API keys, Create Key, then copy the key from the dialog →
+// Billing, buy credits → choose Claude in Margin, paste the key and Save.
+export const CLAUDE_KEY_ART = `<svg class="guide-art" viewBox="0 0 150 96" aria-hidden="true" focusable="false"><g class="g-scene">
+${chrome(106, 74, 54)}
+<path class="g-frame faint" d="M30 16V77"/>
+<rect class="g-nav ant-nav" x="6" y="28.5" width="21" height="7" rx="2.5"/>
+<path class="g-text strong" d="M10 24H20"/><path class="g-text" d="M12 32H24M12 39H22M12 46H23"/>
+<g class="ant-pageA"><path class="g-text strong" d="M36 24H58"/>
+<rect class="g-primary" x="80" y="20" width="24" height="8" rx="3"/><path class="g-on-primary" d="M84 24H100"/>
+<rect class="g-card" x="36" y="33" width="68" height="9" rx="2.5"/><path class="g-text thin" d="M40 37.5H56"/><path class="g-code" d="M64 37.5H84"/>
+<rect class="g-card" x="36" y="45" width="68" height="9" rx="2.5"/><path class="g-text thin" d="M40 49.5H52"/><path class="g-code" d="M64 49.5H80"/>
+<g class="ant-modal"><rect class="g-shadow" x="41" y="33" width="62" height="38" rx="5"/><rect class="g-sheet" x="40" y="31" width="62" height="38" rx="5"/>
+<g class="ant-name"><path class="g-text strong" d="M45 37H68"/><rect class="g-input" x="45" y="41" width="52" height="8" rx="2.5"/><path class="g-text thin" d="M48.5 45H66"/>
+<rect class="g-primary" x="79" y="55" width="18" height="8" rx="3"/><path class="g-on-primary" d="M83.5 59H92.5"/></g>
+<g class="ant-keyview"><path class="g-text strong" d="M45 37H76"/><path class="g-text thin" d="M45 42H92"/>
+<rect class="g-card" x="45" y="47" width="52" height="10" rx="2.5"/>
+<circle class="g-key" cx="50" cy="52" r="2.2"/><path class="g-key" d="M52.2 52H57.5V54M55.5 52V53.6"/><path class="g-code" d="M61 52H80"/>
+<g class="ant-copy"><rect class="g-icon-line" x="86.5" y="49" width="5" height="6" rx="1.1"/><path class="g-icon-line" d="M89 49V47.9a1 1 0 0 1 1-1h3.8a1 1 0 0 1 1 1v4.6a1 1 0 0 1-1 1h-2.3"/></g>
+<path class="g-tick ant-copied" d="M86 52l2 2 3.5-4"/>
+<rect class="g-btn" x="81" y="61" width="16" height="5.5" rx="2"/></g></g></g>
+<g class="ant-pageB"><path class="g-text strong" d="M36 24H54"/>
+<rect class="g-card" x="36" y="29" width="28" height="16" rx="2.5"/><path class="g-text thin" d="M40 33.5H52"/><path class="g-text accent" d="M40 39.5H55"/>
+<rect class="g-btn" x="68" y="32" width="32" height="9" rx="3"/><path class="g-text accent" d="M72.5 36.5H75.5M74 35V38M78.5 36.5H96"/>
+<rect class="g-track" x="36" y="51" width="64" height="4" rx="2"/><rect class="g-fill ant-fill" x="36" y="51" width="44" height="4" rx="2"/></g>
+<g class="ant-margin"><rect class="g-shadow" x="61" y="48" width="86" height="46" rx="7"/><rect class="g-sheet" x="60" y="46" width="86" height="46" rx="7"/>
+${mBadge(66, 51, 9)}<path class="g-text strong" d="M80 55.5H100"/>
+<rect class="g-seg" x="106" y="51" width="34" height="9" rx="4.5"/><rect class="g-seg-on" x="123.5" y="52.3" width="15.2" height="6.4" rx="3.2"/>
+<path class="g-text thin" d="M110 55.5H119"/><path class="g-seg-text" d="M127 55.5H135"/>
+<path class="g-text" d="M66 63H92"/>
+<rect class="g-input ant-input" x="66" y="66" width="74" height="10" rx="3"/><path class="g-code ant-code" d="M71 71H112"/>
+<g class="g-check ant-check"><circle cx="106" cy="84" r="3.4"/><path d="M104.5 84l1.1 1.1 2-2.2"/></g>
+<g class="ant-save"><rect class="g-primary" x="114" y="80" width="26" height="8" rx="3"/><path class="g-on-primary" d="M120 84H134"/></g></g>
+${ripples('ant-r', [[92, 24], [88, 59], [89, 52], [16, 39], [84, 36.5], [100, 71], [127, 84]])}
+${cursor('ant-cursor')}</g></svg>`;

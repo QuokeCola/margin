@@ -12,7 +12,8 @@ import {preparePage, locateQuote} from './quote.js';
 import {parseBibliography, findMarkers, matchEntries} from './bib.js';
 import {clampZoom, wheelZoomFactor, zoomAnchor, pinchStep} from './zoom.js';
 import {applyTheme, getThemePref, setThemePref} from './theme.js';
-import {KEY_ART, EXT_ART} from './guides.js';
+import {KEY_ART, CLAUDE_KEY_ART, EXT_ART} from './guides.js';
+import {LABEL, COMPANY, providerOf, connectionText, composeHint, webTitle, searchNote, keyHint, settingsBody, savingText} from './providers.js';
 pdfjs.GlobalWorkerOptions.workerSrc = worker;
 applyTheme();
 let marked, DOMPurify, renderMath, markdownLoading = null;
@@ -28,7 +29,7 @@ $('#app').innerHTML = `<header><button id="toggle-library" class="icon" title="S
 <main><aside class="library"><div class="project-bar"><div class="project-head"><small>PROJECT</small><button id="manage-projects" class="small" title="All projects: open, rename, delete or create one" aria-haspopup="dialog">Manage</button></div><div class="project-row"><select id="project" aria-label="Project"></select><button id="project-rename" class="icon" title="Rename project" aria-label="Rename project">✎</button><button id="project-delete" class="icon del" title="Delete project" aria-label="Delete project">×</button></div><button id="open-map" class="map-button" title="How the papers in this project cite each other">◎ Citation map</button></div>
 <div class="lib-section"><div class="lib-head"><small>PAPERS</small><label class="file-button small">+ Add PDF<input id="file" type="file" accept="application/pdf"></label></div><ul id="papers" aria-label="Papers"></ul></div>
 <div class="lib-section"><div class="lib-head"><small>CHATS</small><button id="new-chat-side" class="small" title="New chat: about the open paper, or the whole project">+ New</button></div><ul id="chats" aria-label="Chats"></ul></div></aside>
-<section class="chat"><div class="section-head"><div><small id="chat-paper">YOUR STUDY DESK</small><h1 id="chat-title">Read. Question. Understand.</h1></div><button id="new-chat" disabled>New chat</button></div><div id="messages" tabindex="0" aria-label="Conversation"></div><form id="ask"><div id="context" hidden></div><textarea id="question" aria-label="Question about the paper" placeholder="What would you like to understand?" rows="3" maxlength="8000"></textarea><div class="compose-bottom"><span id="compose-hint">Enter to send · Ctrl+Enter for a new line. Paper text + this chat are sent to OpenAI.</span><div class="compose-actions"><button type="button" id="web-toggle" class="web-toggle" aria-pressed="false" title="Let the answer search the web (OpenAI web search, billed per search). Off by default.">⌕ Web</button><button id="send" type="submit">Ask ↗</button></div></div></form><p id="notice" role="status">Add a PDF, or pick one from the library.</p></section>
+<section class="chat"><div class="section-head"><div><small id="chat-paper">YOUR STUDY DESK</small><h1 id="chat-title">Read. Question. Understand.</h1></div><button id="new-chat" disabled>New chat</button></div><div id="messages" tabindex="0" aria-label="Conversation"></div><form id="ask"><div id="context" hidden></div><textarea id="question" aria-label="Question about the paper" placeholder="What would you like to understand?" rows="3" maxlength="8000"></textarea><div class="compose-bottom"><span id="compose-hint">Enter to send · Ctrl+Enter for a new line.</span><div class="compose-actions"><button type="button" id="web-toggle" class="web-toggle" aria-pressed="false" title="Let the answer search the web (billed per search). Off by default.">⌕ Web</button><button id="send" type="submit">Ask ↗</button></div></div></form><p id="notice" role="status">Add a PDF, or pick one from the library.</p></section>
 <section class="reader"><div class="section-head"><div><small>SOURCE DOCUMENT</small><h2 id="filename">Your paper, in context</h2><p id="paper-byline"></p></div><button id="paper-info" class="small" disabled title="Paper details: authors, venue, DOI, abstract">ⓘ Info</button></div><div class="toolbar"><label><input id="follow" type="checkbox" checked> Follow chat</label><div><label>Page <input id="page" type="number" min="1" value="1"></label><span id="total">/ —</span><button id="go">Go</button></div><button id="marker" title="Marker: drag a box over any part of the page to ask about it (Esc to cancel)" aria-pressed="false">✎ Mark</button><div class="zoom" title="Pinch the trackpad (or Ctrl + scroll) over the page to zoom"><button id="zoom-out" aria-label="Zoom out">−</button><button id="zoom-reset" title="Reset to 100%">100%</button><button id="zoom-in" aria-label="Zoom in">+</button></div></div><div id="pdf"><div class="empty"><div class="paper-icon">∑</div><h2>Make room for the original.</h2><p>Add a PDF from your laptop, or pick a paper from the library.<br>Pinch the trackpad over a page to zoom.</p></div></div><details id="manual"><summary>Find a reference / correct an equation location</summary><div class="manual-grid"><label>Equation <input id="equation" placeholder="61"></label><label>PDF page <input id="map-page" type="number" min="1" value="1"></label><label>Position from top (%) <input id="map-y" type="number" min="0" max="100" value="50"></label><button id="find">Find equation</button><button id="save">Save correction</button><button id="remove">Remove correction</button></div><p>Corrections are saved with this paper in your library. Click the PDF while this panel is open to pick a position. Pages use PDF order, not printed journal numbers.</p></details></section>
 <section id="map-view" hidden aria-label="Citation map"><div class="map-bar"><button id="map-back">← Back to reading</button><div class="map-title"><small>CITATION MAP</small><h2 id="map-project"></h2></div>
 <div class="map-filters"><label><input type="checkbox" id="mf-refs" checked> <i class="dot k-reference"></i>References</label><label><input type="checkbox" id="mf-citing" checked> <i class="dot k-citing"></i>Citing papers</label><label title="Only papers linked to two or more of your papers"><input type="checkbox" id="mf-shared"> Only shared</label><label><input type="checkbox" id="mf-year"> Arrange by year</label><button id="map-fit" class="small" title="Fit the map to the window">Fit</button><button id="map-refresh" class="small" title="Fetch references and citations again">↻</button></div></div>
@@ -41,14 +42,17 @@ $('#app').innerHTML = `<header><button id="toggle-library" class="icon" title="S
 <dialog id="ask-text"><form id="ask-text-form"><h2 id="ask-text-title"></h2><label><input id="ask-text-input" autocomplete="off" maxlength="200"></label><div class="dialog-buttons"><button type="button" id="ask-text-cancel">Cancel</button><button type="submit" class="primary">Save</button></div></form></dialog>
 <dialog id="info" aria-label="Paper details"><div class="dialog-x-bar"><button type="button" class="dialog-x" data-close aria-label="Close" title="Close (Esc)">×</button></div><div class="info-body"><div id="info-content"></div><div class="info-lookup"><label>DOI<input id="info-doi" placeholder="10.1109/…" autocomplete="off" spellcheck="false"></label><button type="button" id="info-lookup">Look up</button></div><p id="info-msg" role="status"></p><div class="dialog-buttons"><button type="button" id="info-close" class="primary">Close</button></div></div></dialog>
 <dialog id="settings" aria-labelledby="settings-title"><form id="settings-form"><div class="dialog-x-bar"><button type="button" class="dialog-x" data-close aria-label="Close" title="Close (Esc)">×</button></div><h2 id="settings-title">Settings</h2>
-<label>OpenAI API key<input id="key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-…"></label><p id="key-hint" class="hint"></p><div class="guide">${KEY_ART}<ol class="setup-steps"><li>Sign in at <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">platform.openai.com/api-keys</a> and click <b>Create new secret key</b>.</li><li>Add credit under Billing if your account has none; answers are billed per use.</li><li>Paste the key above and click <b>Save</b>.</li></ol></div><nav class="openai-links" aria-label="OpenAI account pages"><a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">Create an API key ↗</a><a href="https://platform.openai.com/usage" target="_blank" rel="noopener noreferrer">Usage ↗</a><a href="https://platform.openai.com/settings/organization/billing/overview" target="_blank" rel="noopener noreferrer">Billing ↗</a></nav>
+<div class="provider-choice"><span class="field-label" id="provider-label">AI provider</span><div class="segmented" role="radiogroup" aria-labelledby="provider-label"><label><input type="radio" name="provider" value="openai"><span><b>OpenAI</b><small data-key-status="openai"></small></span></label><label><input type="radio" name="provider" value="anthropic"><span><b>Claude</b><small data-key-status="anthropic"></small></span></label></div>
+<p id="search-note" class="hint search-note" hidden><span></span> <button type="button" class="small" id="embed-key-show">Add OpenAI key</button></p><label id="embed-key-row" hidden>OpenAI API key for project search (optional)<input id="embed-key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-…"></label></div>
+<div class="provider-pane" data-provider="openai"><label>OpenAI API key<input id="key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-…"></label><p id="key-hint" class="hint"></p><div class="guide">${KEY_ART}<ol class="setup-steps"><li>Sign in at <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">platform.openai.com/api-keys</a> and click <b>Create new secret key</b>.</li><li>Add credit under Billing if your account has none; answers are billed per use.</li><li>Paste the key above and click <b>Save</b>.</li></ol></div><nav class="openai-links" aria-label="OpenAI account pages"><a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">Create an API key ↗</a><a href="https://platform.openai.com/usage" target="_blank" rel="noopener noreferrer">Usage ↗</a><a href="https://platform.openai.com/settings/organization/billing/overview" target="_blank" rel="noopener noreferrer">Billing ↗</a></nav></div>
+<div class="provider-pane" data-provider="anthropic" hidden><label>Anthropic API key<input id="anthropic-key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-…"></label><p id="anthropic-key-hint" class="hint"></p><div class="guide">${CLAUDE_KEY_ART}<ol class="setup-steps"><li>Sign in at <a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener noreferrer">platform.claude.com</a> (the Claude Console), open <b>Settings → API keys</b> and click <b>Create Key</b>; copy the key.</li><li>Add credits under <b>Billing</b> if your account has none; answers are billed per use.</li><li>Paste the key above and click <b>Save</b>.</li></ol></div><nav class="openai-links" aria-label="Anthropic account pages"><a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener noreferrer">Create an API key ↗</a><a href="https://platform.claude.com/usage" target="_blank" rel="noopener noreferrer">Usage ↗</a><a href="https://platform.claude.com/settings/billing" target="_blank" rel="noopener noreferrer">Billing ↗</a></nav></div>
 <label>Library proxy prefix (optional)<input id="proxy-prefix" autocomplete="off" spellcheck="false" placeholder="https://proxy.lib.your-university.edu/login?url="></label><p class="hint">Used by “Get PDF” in the desktop app to open papers through your library’s sign-in. Ask your library for its proxy link prefix (EZproxy “login?url=” style).</p>
 <div class="ext-box"><b>Browser extension</b><p class="hint" id="ext-status">Lets “Add to project” use your own browser and its logins: the paper opens there and the PDF comes back automatically.</p>
 <div class="guide">${EXT_ART}<ol class="setup-steps"><li>In Chrome (or Edge/Brave), open <code>chrome://extensions</code> and turn on <b>Developer mode</b>.</li><li>Click <b>Load unpacked</b> and choose this folder: <code id="ext-folder">…</code> <button type="button" class="small" id="ext-copy-folder">Copy</button></li><li>Click the Margin icon in the toolbar and paste the pairing code: <code id="ext-code">••••••</code> <button type="button" class="small" id="ext-show">Show code</button></li></ol></div></div>
-<label>Model<select id="settings-model"></select></label><label>…or type a model ID<input id="custom-model" autocomplete="off" spellcheck="false" placeholder="e.g. gpt-5.2"></label>
-<p class="hint">Stored only on this computer, in a file readable only by you, and applied immediately. A new key is checked with OpenAI before it is saved; it is sent only to OpenAI.</p>
+<label><span>Model <span id="settings-provider-name"></span></span><select id="settings-model"></select></label><p id="models-note" class="hint" hidden></p><label>…or type a model ID<input id="custom-model" autocomplete="off" spellcheck="false" placeholder="e.g. gpt-5.2"></label>
+<p class="hint">Keys are stored only on this computer, in a file readable only by you, and applied immediately. A new key is checked with its provider before it is saved, and is sent only to that provider.</p>
 <label>Theme<select id="theme" title="Applied right away; kept in this app's browser storage"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
-<p id="settings-msg" role="status"></p><div class="dialog-buttons"><button type="button" id="settings-cancel">Cancel</button><button type="submit" id="settings-save" class="primary">Save</button></div></form></dialog>
+<div class="dialog-buttons"><p id="settings-msg" role="status"></p><button type="button" id="settings-cancel">Cancel</button><button type="submit" id="settings-save" class="primary">Save</button></div></form></dialog>
 <dialog id="projects" aria-labelledby="projects-title"><div class="dialog-x-bar"><button type="button" class="dialog-x" data-close aria-label="Close" title="Close (Esc)">×</button></div><h2 id="projects-title">Projects</h2><p class="hint">Each project has its own papers and chats; a paper can be in several projects.</p><ul id="project-list" aria-label="Projects"></ul><p id="projects-msg" role="status"></p><form id="project-new" class="project-new"><input id="project-new-name" maxlength="100" autocomplete="off" placeholder="New project name" aria-label="New project name"><button type="submit" class="primary">+ New project</button></form></dialog>
 <dialog id="confirm" aria-labelledby="confirm-title" aria-describedby="confirm-body"><form id="confirm-form" method="dialog"><h2 id="confirm-title"></h2><div id="confirm-body"></div><div class="dialog-buttons"><button type="button" id="confirm-cancel">Cancel</button><button type="submit" id="confirm-ok" class="danger"></button></div></form></dialog>`;
 
@@ -58,7 +62,7 @@ let pageBoxes = {}, eqByPage = {}, quotePages = {}, context = null; // quotePage
 let bib = {start: null, entries: new Map()}, refHits = {}, refRecords = [], refByNum = new Map(), refsState = 'idle'; // references of the open paper // text-item geometry and detected equations per page; pending attachment
 let working = false, loading = false, generation = 0, activeRef = null, renderQueue = Promise.resolve();
 let chatShown = 0; // which showChat/showWelcome is current (older messages are added in the background)
-let webSearch = false; // per launch: answers may use OpenAI web search when switched on
+let webSearch = false; // per launch: answers may use the provider's web search when switched on
 const isProjectChat = c => c?.scope === 'project';
 let zoom = 1;
 try { zoom = clampZoom(Number(localStorage.getItem('margin-zoom')) || 1); } catch {}
@@ -92,17 +96,35 @@ function controls() {
 }
 
 // ---------- settings & models ----------
+// Model lists per provider: {models, fallback?, error?}. fallback: the server could not load Anthropic's
+// list and sent Margin's suggested Claude models instead.
+const modelLists = {};
+function modelOptions(p, current) {
+  const list = modelLists[p], ids = [...new Set([current, ...(list?.models || [])].filter(Boolean))];
+  const opts = ids.map(id => h('option', {value: id, textContent: id, selected: id === current}));
+  return list?.fallback ? [h('optgroup', {label: 'Suggested (list unavailable)'}, ...opts)] : opts;
+}
+const keyWanted = () => session?.providers && !Object.values(session.providers).some(x => x.configured) ? 'an OpenAI or Anthropic API key' : `your ${COMPANY[providerOf(session)]} API key`;
 function showStatus() {
-  $('#connection').textContent = !session ? '○ Server offline' : session.configured ? '● Connected' : '○ API key needed';
-  $('#connection').className = session?.configured ? 'ok' : 'warn';
+  const p = providerOf(session), el = $('#connection');
+  el.textContent = connectionText(session);
+  el.className = session?.configured ? 'ok' : 'warn';
+  el.title = session ? `Answers come from ${COMPANY[p]}. Choose the provider in Settings.` : '';
   const sel = $('#model');
-  const ids = [...new Set([session?.model, ...models].filter(Boolean))];
-  sel.replaceChildren(...ids.map(id => h('option', {value: id, textContent: id, selected: id === session?.model})));
+  sel.replaceChildren(...modelOptions(p, session?.model));
+  sel.title = modelLists[p]?.fallback ? `Model used for new answers. ${COMPANY[p]}'s model list could not be loaded; these are suggested models.` : 'Model used for new answers';
   sel.disabled = !session?.configured || working;
+  $('#web-toggle').title = webTitle(session);
+  $('#compose-hint').textContent = composeHint(session, isProjectChat(chat));
+}
+async function fetchModels(p) {
+  delete modelLists[p];
+  if (!session?.providers?.[p]?.configured && !(p === providerOf(session) && session?.configured)) return;
+  const r = await api(`/api/models?provider=${p}`);
+  modelLists[p] = {models: r.models, fallback: !!r.fallback};
 }
 async function loadModels() {
-  models = [];
-  if (session?.configured) try { models = (await api('/api/models')).models; } catch (e) { notice(e.message + ' You can still type a model ID in Settings.'); }
+  try { await fetchModels(providerOf(session)); } catch (e) { notice(e.message + ' You can still type a model ID in Settings.'); }
   showStatus();
 }
 async function saveSettings(body) {
@@ -115,39 +137,81 @@ $('#model').onchange = async e => {
   try { await saveSettings({model: e.target.value}); notice(`New answers will use ${session.model}.`); }
   catch (err) { notice(err.message); showStatus(); }
 };
+// Settings shows the key field, guide and models of the provider chosen there; it becomes the
+// app's provider on Save.
+let settingsProvider = 'openai';
+function showSettingsProvider(p) {
+  settingsProvider = p;
+  for (const r of document.querySelectorAll('#settings input[name=provider]')) r.checked = r.value === p;
+  for (const pane of document.querySelectorAll('#settings .provider-pane')) pane.hidden = pane.dataset.provider !== p;
+  for (const el of document.querySelectorAll('#settings [data-key-status]')) {
+    const s = session?.providers?.[el.dataset.keyStatus];
+    el.textContent = s?.configured ? `key saved · ${s.keyHint}` : 'no key';
+    el.classList.toggle('saved', !!s?.configured);
+  }
+  const note = searchNote(p, session), noteEl = $('#search-note');
+  noteEl.hidden = !note;
+  if (note) { noteEl.querySelector('span').textContent = note.text; noteEl.className = 'hint search-note ' + note.kind; }
+  if (note?.kind !== 'keywords') $('#embed-key-row').hidden = true; // a typed key stays in the field
+  $('#embed-key-show').hidden = note?.kind !== 'keywords' || !$('#embed-key-row').hidden;
+  $('#settings-provider-name').textContent = `(${LABEL[p]})`;
+  $('#custom-model').placeholder = p === 'anthropic' ? 'e.g. claude-sonnet-5-5' : 'e.g. gpt-5.2';
+  renderSettingsModels();
+  if (!modelLists[p] && session?.providers?.[p]?.configured)
+    fetchModels(p).catch(e => { modelLists[p] = {models: [], error: e.message}; }).then(() => { if (settingsProvider === p) renderSettingsModels(); });
+}
+function renderSettingsModels() {
+  const p = settingsProvider, list = modelLists[p], has = !!session?.providers?.[p]?.configured;
+  $('#settings-model').replaceChildren(...modelOptions(p, session?.providers?.[p]?.model));
+  const note = $('#models-note');
+  note.textContent = !has ? `Save ${p === 'anthropic' ? 'an Anthropic' : 'an OpenAI'} key to list its models.`
+    : list?.error ? `${list.error} You can still type a model ID.`
+    : list?.fallback ? `${COMPANY[p]}'s model list could not be loaded; these are suggested models. You can also type a model ID.` : '';
+  note.hidden = !note.textContent;
+}
 $('#open-settings').onclick = () => {
-  $('#key').value = ''; $('#custom-model').value = ''; $('#settings-msg').textContent = ''; $('#proxy-prefix').value = session?.proxyPrefix || '';
-  $('#key-hint').textContent = session?.configured ? `A key is saved (${session.keyHint}). Leave blank to keep it.` : 'No key saved yet.';
-  const ids = [...new Set([session?.model, ...models].filter(Boolean))];
-  $('#settings-model').replaceChildren(...ids.map(id => h('option', {value: id, textContent: id, selected: id === session?.model})));
+  for (const id of ['#key', '#anthropic-key', '#embed-key', '#custom-model']) $(id).value = '';
+  $('#embed-key-row').hidden = true;
+  $('#settings-msg').textContent = ''; $('#proxy-prefix').value = session?.proxyPrefix || '';
+  $('#key-hint').textContent = keyHint(session, 'openai');
+  $('#anthropic-key-hint').textContent = keyHint(session, 'anthropic');
+  showSettingsProvider(providerOf(session));
   $('#theme').value = getThemePref();
-  $('#settings').showModal(); $('#key').focus();
+  $('#settings').showModal(); $(settingsProvider === 'anthropic' ? '#anthropic-key' : '#key').focus();
   api('/api/extension').then(x => {
     $('#ext-folder').textContent = x.folder; $('#ext-code').textContent = x.paired ? '••••••' : '(not created yet)';
     $('#ext-status').textContent = x.lastSeen ? `Extension connected (last contact ${fmtDate(x.lastSeen)}). “Add to project” opens papers in your browser.` : x.paired ? 'Paired, but the extension has not contacted Margin since it started. Open any web page in your browser to wake it.' : 'Lets “Add to project” use your own browser and its logins: the paper opens there and the PDF comes back automatically.';
   }).catch(() => {});
 };
+for (const r of document.querySelectorAll('#settings input[name=provider]')) r.onchange = () => { $('#settings-msg').textContent = ''; $('#custom-model').value = ''; showSettingsProvider(r.value); };
+$('#embed-key-show').onclick = e => { $('#embed-key-row').hidden = false; e.currentTarget.hidden = true; $('#embed-key').focus(); };
 $('#settings-cancel').onclick = () => $('#settings').close();
 $('#theme').onchange = e => setThemePref(e.target.value);
 $('#ext-show').onclick = async () => { try { const {code} = await api('/api/extension/pairing', {body: {}}); $('#ext-code').textContent = code; navigator.clipboard?.writeText(code).then(() => toast('Pairing code copied.')).catch(() => {}); } catch (e) { toast(e.message); } };
 $('#ext-copy-folder').onclick = () => navigator.clipboard?.writeText($('#ext-folder').textContent).then(() => toast('Folder path copied.')).catch(() => {});
 $('#settings-form').onsubmit = async e => {
   e.preventDefault();
-  const key = $('#key').value.trim(), custom = $('#custom-model').value.trim(), picked = $('#settings-model').value;
-  const body = {}; if (key) body.apiKey = key;
-  const proxy = $('#proxy-prefix').value.trim(); if (proxy !== (session?.proxyPrefix || '')) body.proxyPrefix = proxy;
-  const m = custom || picked; if (m && m !== session?.model) body.model = m;
-  if (!Object.keys(body).length) { $('#settings').close(); return; }
-  $('#settings-save').disabled = true; $('#settings-msg').textContent = key ? 'Checking the key with OpenAI…' : 'Saving…';
+  const p = settingsProvider;
+  // The OpenAI key comes from its own field, or from the optional project-search field shown with Claude.
+  const keys = {openai: $('#key').value.trim() || $('#embed-key').value.trim(), anthropic: $('#anthropic-key').value.trim()};
+  const body = settingsBody({status: session, selected: p, keys, model: $('#custom-model').value.trim() || $('#settings-model').value, proxyPrefix: $('#proxy-prefix').value.trim()});
+  if (!body) { $('#settings').close(); return; }
+  $('#settings-save').disabled = true; $('#settings-msg').textContent = savingText(body);
   try {
     const hadKey = session?.configured;
     await saveSettings(body);
-    $('#key').value = '';
+    for (const id of ['#key', '#anthropic-key', '#embed-key']) $(id).value = '';
     $('#settings').close();
-    notice(key ? 'API key saved.' : body.model ? `Model set to ${session.model}.` : 'Settings saved.');
-    if (key || !hadKey) await loadModels();
-  } catch (err) { $('#settings-msg').textContent = err.message; }
-  finally { $('#settings-save').disabled = false; }
+    const saved = [body.apiKey && 'OpenAI', body.anthropicKey && 'Anthropic'].filter(Boolean);
+    notice(body.provider ? `Answers now come from ${LABEL[p]} (${session.model}).` : saved.length ? `${saved.join(' and ')} API key${saved.length > 1 ? 's' : ''} saved.` : body.openaiModel || body.anthropicModel ? `Model set to ${session.model}.` : 'Settings saved.');
+    if (body.apiKey) delete modelLists.openai;
+    if (body.anthropicKey) delete modelLists.anthropic;
+    if (body.apiKey || body.anthropicKey || body.provider || !hadKey) await loadModels();
+  } catch (err) {
+    $('#settings-msg').textContent = err.message;
+    // A rejected key, or a provider chosen without one: put the cursor where the key goes.
+    if (/key/i.test(err.message)) $(/OpenAI/.test(err.message) && p === 'anthropic' ? '#embed-key' : p === 'anthropic' ? '#anthropic-key' : '#key').focus();
+  } finally { $('#settings-save').disabled = false; }
 };
 
 // In-app text prompt (window.prompt is unavailable in the desktop app).
@@ -391,7 +455,7 @@ function showChat(c) {
   $('#chat-title').textContent = c.title;
   $('#messages').replaceChildren();
   const whole = isProjectChat(c);
-  $('#compose-hint').textContent = whole ? 'Enter to send · Ctrl+Enter for a new line. Passages from this project\'s papers + this chat are sent to OpenAI.' : 'Enter to send · Ctrl+Enter for a new line. Paper text + this chat are sent to OpenAI.';
+  $('#compose-hint').textContent = composeHint(session, whole);
   showPaperHeader();
   if (!c.messages.length) $('#messages').append(h('div', {className: 'chat-empty'},
     h('p', {textContent: whole ? `Ask across all ${project.papers.length} paper${project.papers.length === 1 ? '' : 's'} of “${project.name}”. Margin searches them for the passages that matter; each citation names its paper, and selecting it opens that paper at the passage.` : 'Ask anything about this paper. Answers cite PDF pages and equations; select a citation to bring the source into view.'}),
@@ -933,7 +997,7 @@ $('#ask').onsubmit = async e => {
   const image = ctx?.image;
   if (!whole && !pages.some(p => p.text.trim())) { notice('This PDF has no extractable text. Use OCR first.'); return; }
   if (whole && !project.papers.length) { notice('Add papers to this project first.'); return; }
-  if (!session?.configured) { notice('Add your OpenAI API key in Settings first.'); $('#open-settings').click(); return; }
+  if (!session?.configured) { notice(`Add ${keyWanted()} in Settings first.`); $('#open-settings').click(); return; }
   working = true; controls(); showStatus();
   try { await loadMarkdown(); } catch (e) { notice('Could not load the chat view: ' + e.message); working = false; controls(); showStatus(); return; }
   const target = chat, projectId = project.id;
@@ -1404,8 +1468,8 @@ showWelcome(); controls();
 try { session = await fetch('/api/status').then(r => r.json()); } catch { notice('Local server unavailable. Restart the app.'); }
 showStatus();
 if (session) {
-  if (!session.configured) notice('Welcome! Open Settings to add your OpenAI API key.');
+  if (!session.configured) notice(`Welcome! Open Settings to add ${keyWanted()}.`);
   await Promise.all([loadModels(), refreshProjects().then(() => renderLibrary()).catch(e => notice(e.message))]);
   idle(() => loadMarkdown().catch(() => {}), 3000); // so the first chat opens without waiting for the Markdown/maths code
-  if (project?.papers.length && !paper) notice(session.configured ? `Project "${project.name}": pick a paper in the sidebar, or add a PDF.` : 'Open Settings to add your OpenAI API key.');
+  if (project?.papers.length && !paper) notice(session.configured ? `Project "${project.name}": pick a paper in the sidebar, or add a PDF.` : `Open Settings to add ${keyWanted()}.`);
 }

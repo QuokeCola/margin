@@ -119,3 +119,32 @@
 @keyframes g-input-81{0%,80%{stroke:var(--input-border)}82%,100%{stroke:var(--green)}}
 @keyframes g-check-86{0%,86%{opacity:0;transform:scale(.4)}90%,100%{opacity:1;transform:none}}
 @keyframes g-check-87{0%,87%{opacity:0;transform:scale(.4)}91%,100%{opacity:1;transform:none}}
+
+/* Claude (Anthropic Console) key: Create Key opens a dialog (name it, then copy the key) → Billing,
+   buy credits → Margin with Claude chosen: paste and Save. */
+.g-seg{fill:var(--surface);stroke:var(--btn-border);stroke-width:1}
+.g-seg-on{fill:var(--active);stroke:var(--green);stroke-width:.8}
+.g-seg-text{fill:none;stroke:var(--green);stroke-width:1.6;stroke-linecap:round}
+.ant-modal,.ant-margin,.ant-save,.ant-check{transform-box:fill-box}
+.ant-modal{transform-origin:center}.ant-save,.ant-check{transform-origin:center}
+.ant-fill{transform-box:fill-box;transform-origin:left center}
+.ant-cursor{transform:translate(127px,84px);animation-name:ant-cursor}
+@keyframes ant-cursor{0%,3%{transform:translate(96px,70px)}8%,10%{transform:translate(92px,24px)}14%,16%{transform:translate(88px,59px)}20%,34%{transform:translate(89px,52px)}39%,41%{transform:translate(16px,39px)}46%,66%{transform:translate(84px,36.5px)}73%,76%{transform:translate(100px,71px)}83%,100%{transform:translate(127px,84px)}}
+.ant-r1{animation-name:g-click-10}.ant-r2{animation-name:g-click-16}.ant-r3{animation-name:g-click-22}.ant-r4{animation-name:g-click-40}.ant-r5{animation-name:g-click-47}.ant-r6{animation-name:g-click-75}.ant-r7{animation-name:g-click-85}
+.ant-modal{animation-name:ant-modal}
+@keyframes ant-modal{0%,10%{opacity:0;transform:translateY(3px) scale(.96)}13%,100%{opacity:1;transform:none}}
+.ant-name{opacity:0;animation-name:ant-name}
+@keyframes ant-name{0%,10%{opacity:0}11%,16.5%{opacity:1}17.5%,100%{opacity:0}}
+.ant-keyview{animation-name:g-fade-in-17}
+.ant-copied{animation-name:g-fade-in-22}.ant-copy{animation-name:g-fade-out-22}
+.ant-pageA{opacity:0;animation-name:g-page-out-40}
+.ant-pageB{animation-name:g-fade-in-41}
+.ant-nav{transform:translateY(7px);animation-name:key-nav}
+.ant-fill{animation-name:key-fill}
+.ant-margin{animation-name:g-appear-64}
+.ant-code{animation-name:g-fade-in-76}
+.ant-input{animation-name:g-input-76}
+.ant-save{animation-name:key-save}
+.ant-check{animation-name:g-check-87}
+@keyframes g-click-16{0%,15.5%{opacity:0;transform:scale(.3)}16%{opacity:.7}21%,100%{opacity:0;transform:scale(1.5)}}
+@keyframes g-fade-in-17{0%,17%{opacity:0}18.5%,100%{opacity:1}}
