@@ -152,3 +152,12 @@ dialog[open]::backdrop{animation:fade .26s ease}
 .chat .section-head>div{min-width:0;flex:1}
 #chat-title,#chat-paper{max-width:100%}
 #new-chat{flex:none}
+
+/* marker */
+#marker{font-size:11px;padding:5px 10px;margin-left:auto;margin-right:10px}
+#marker.active{background:#315e4e;color:#fff;border-color:#315e4e}
+#pdf.marking .pdf-page{cursor:crosshair}
+#pdf.marking .textLayer{pointer-events:none}
+.marker-box{position:absolute;z-index:4;border:2px solid #d0782f;border-radius:4px;background:#f2a35a26;pointer-events:none}
+.marker-box.draft{border-style:dashed}
+.marker-box.attached{border-color:#315e4e;background:#5c8f6f1f;animation:fade .2s ease}

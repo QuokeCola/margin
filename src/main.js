@@ -6,7 +6,7 @@ import renderMath from 'katex/contrib/auto-render';
 import 'katex/dist/katex.min.css';
 import './style.css';
 import {parseReferences, resolveReference, TOKEN, tokenRef, findMentions, tagOf, QUOTE} from './references.js';
-import {equationBox, findQuote, isEquationLabel} from './layout.js';
+import {findQuote, textBoxes, detectEquations} from './layout.js';
 import {clampZoom, wheelZoomFactor} from './zoom.js';
 pdfjs.GlobalWorkerOptions.workerSrc = worker;
 const $ = s => document.querySelector(s);
@@ -16,7 +16,7 @@ $('#app').innerHTML = `<header><button id="toggle-library" class="icon" title="S
 <div class="header-tools"><label class="model-picker" title="Model used for new answers">Model <select id="model" disabled><option>…</option></select></label><span id="connection">Connecting…</span><button id="open-settings">Settings</button></div></header>
 <main><aside class="library"><div class="section-head"><div><small>LIBRARY</small><h2>Papers &amp; chats</h2></div><label class="file-button">+ Add PDF<input id="file" type="file" accept="application/pdf"></label></div><ul id="papers" aria-label="Papers"></ul></aside>
 <section class="chat"><div class="section-head"><div><small id="chat-paper">YOUR STUDY DESK</small><h1 id="chat-title">Read. Question. Understand.</h1></div><button id="new-chat" disabled>New chat</button></div><div id="messages" tabindex="0" aria-label="Conversation"></div><form id="ask"><div id="context" hidden></div><textarea id="question" aria-label="Question about the paper" placeholder="What would you like to understand?" rows="3" maxlength="8000"></textarea><div class="compose-bottom"><span>Enter to send · Ctrl+Enter for a new line. Paper text + this chat are sent to OpenAI.</span><button id="send" type="submit">Ask ↗</button></div></form><p id="notice" role="status">Add a PDF, or pick one from the library.</p></section>
-<section class="reader"><div class="section-head"><div><small>SOURCE DOCUMENT</small><h2 id="filename">Your paper, in context</h2></div></div><div class="toolbar"><label><input id="follow" type="checkbox" checked> Follow chat</label><div><label>Page <input id="page" type="number" min="1" value="1"></label><span id="total">/ —</span><button id="go">Go</button></div><div class="zoom" title="Pinch the trackpad (or Ctrl + scroll) over the page to zoom"><button id="zoom-out" aria-label="Zoom out">−</button><button id="zoom-reset" title="Reset to 100%">100%</button><button id="zoom-in" aria-label="Zoom in">+</button></div></div><div id="pdf"><div class="empty"><div class="paper-icon">∑</div><h2>Make room for the original.</h2><p>Add a PDF from your laptop, or pick a paper from the library.<br>Pinch the trackpad over a page to zoom.</p></div></div><details id="manual"><summary>Find a reference / correct an equation location</summary><div class="manual-grid"><label>Equation <input id="equation" placeholder="61"></label><label>PDF page <input id="map-page" type="number" min="1" value="1"></label><label>Position from top (%) <input id="map-y" type="number" min="0" max="100" value="50"></label><button id="find">Find equation</button><button id="save">Save correction</button><button id="remove">Remove correction</button></div><p>Corrections are saved with this paper in your library. Click the PDF while this panel is open to pick a position. Pages use PDF order, not printed journal numbers.</p></details></section></main>
+<section class="reader"><div class="section-head"><div><small>SOURCE DOCUMENT</small><h2 id="filename">Your paper, in context</h2></div></div><div class="toolbar"><label><input id="follow" type="checkbox" checked> Follow chat</label><div><label>Page <input id="page" type="number" min="1" value="1"></label><span id="total">/ —</span><button id="go">Go</button></div><button id="marker" title="Marker: drag a box over any part of the page to ask about it (Esc to cancel)" aria-pressed="false">✎ Mark</button><div class="zoom" title="Pinch the trackpad (or Ctrl + scroll) over the page to zoom"><button id="zoom-out" aria-label="Zoom out">−</button><button id="zoom-reset" title="Reset to 100%">100%</button><button id="zoom-in" aria-label="Zoom in">+</button></div></div><div id="pdf"><div class="empty"><div class="paper-icon">∑</div><h2>Make room for the original.</h2><p>Add a PDF from your laptop, or pick a paper from the library.<br>Pinch the trackpad over a page to zoom.</p></div></div><details id="manual"><summary>Find a reference / correct an equation location</summary><div class="manual-grid"><label>Equation <input id="equation" placeholder="61"></label><label>PDF page <input id="map-page" type="number" min="1" value="1"></label><label>Position from top (%) <input id="map-y" type="number" min="0" max="100" value="50"></label><button id="find">Find equation</button><button id="save">Save correction</button><button id="remove">Remove correction</button></div><p>Corrections are saved with this paper in your library. Click the PDF while this panel is open to pick a position. Pages use PDF order, not printed journal numbers.</p></details></section></main>
 <div id="pdf-pop" hidden><button type="button" id="pop-ask">Ask AI ↗</button></div>
 <dialog id="ask-text"><form id="ask-text-form"><h2 id="ask-text-title"></h2><label><input id="ask-text-input" autocomplete="off" maxlength="200"></label><div class="dialog-buttons"><button type="button" id="ask-text-cancel">Cancel</button><button type="submit" class="primary">Save</button></div></form></dialog>
 <dialog id="settings"><form id="settings-form"><h2>Settings</h2>
@@ -193,7 +193,7 @@ async function closePaper() {
   generation++;
   await renderQueue.catch(() => {});
   await destroyDoc();
-  doc = null; paper = null; chat = null; pages = []; index = {}; overrides = {}; activeRef = null; pageBoxes = {}; eqByPage = {}; setContext(null); hidePop();
+  doc = null; paper = null; chat = null; pages = []; index = {}; overrides = {}; activeRef = null; pageBoxes = {}; eqByPage = {}; setContext(null); hidePop(); setMarking(false);
   $('#pdf').replaceChildren(h('div', {className: 'empty', innerHTML: '<div class="paper-icon">∑</div><h2>Make room for the original.</h2><p>Add a PDF from your laptop, or pick a paper from the library.</p>'}));
   $('#filename').textContent = 'Your paper, in context'; $('#total').textContent = '/ —';
   showWelcome(); controls();
@@ -240,18 +240,11 @@ async function openPaper(id, bytes) {
       const page = await doc.getPage(n), vp = page.getViewport({scale: 1}), content = await page.getTextContent();
       const items = content.items.filter(t => typeof t.str === 'string');
       pages.push({page: n, text: items.map(t => t.str + (t.hasEOL ? '\n' : ' ')).join('')});
-      // Text-item boxes in page pixels (scale 1, top-left origin), used for equation frames and quotes.
-      const boxes = items.filter(t => t.str.length).map(t => { const m = pdfjs.Util.transform(vp.transform, t.transform), fh = Math.hypot(m[2], m[3]); return {s: t.str, x0: m[4], x1: m[4] + t.width, y0: m[5] - fh * 0.82, y1: m[5] + fh * 0.22}; });
+      const boxes = textBoxes(items, vp, pdfjs.Util); // used for equation frames and quotes
       pageBoxes[n] = boxes;
-      // Equation numbers like "(12)" at the right edge of a column ("(", "12", ")" split items are joined).
-      for (let i = 0; i < boxes.length; i++) {
-        let b = boxes[i], label = b.s.trim();
-        if (label === '(' && boxes[i + 2]) { const g = boxes.slice(i, i + 3); label = g.map(v => v.s).join('').trim(); b = {s: label, x0: g[0].x0, x1: g[2].x1, y0: Math.min(...g.map(v => v.y0)), y1: Math.max(...g.map(v => v.y1))}; }
-        const match = label.match(/^\(\s*(\d+[a-z]?)\s*\)$/i);
-        if (!match || !isEquationLabel(boxes, b, vp.width)) continue;
-        const box = equationBox(boxes, b, vp.width, vp.height);
-        const entry = {page: n, y: box.y0, x: b.x0 / vp.width, box, label: match[1]};
-        (index[match[1]] ??= []).push(entry); (eqByPage[n] ??= []).push(entry);
+      for (const e of detectEquations(boxes, vp.width, vp.height)) {
+        const entry = {page: n, y: e.box.y0, x: e.labelBox.x0, box: e.box, label: e.label};
+        (index[e.label] ??= []).push(entry); (eqByPage[n] ??= []).push(entry);
       }
       const el = h('div', {className: 'pdf-page'}, h('span', {className: 'page-badge', textContent: n}));
       el.dataset.page = n; el.dataset.width = vp.width; el.dataset.height = vp.height; sizePage(el);
@@ -453,8 +446,10 @@ $('#ask').onsubmit = async e => {
   const typed = $('#question').value.trim(), ctx = context;
   if ((!typed && !ctx) || !doc || !chat || working || loading) return;
   const question = !ctx ? typed : ctx.kind === 'passage'
-    ? `> ${ctx.text}\n>\n> — PDF page ${ctx.page}\n\n${typed || 'Explain this passage.'}`
-    : `**About Eq. (${ctx.label}), PDF page ${ctx.page}** (image of the equation attached)\n\n${typed || 'Explain this equation: what each term means and how the paper uses it.'}`;
+    ? `> ${ctx.text}\n>\n> — PDF page ${ctx.page}${ctx.image ? ' (image of the selected lines attached, for symbols the text drops)' : ''}\n\n${typed || 'Explain this passage.'}`
+    : ctx.kind === 'region'
+      ? `**About a marked area on PDF page ${ctx.page}** (${ctx.where}; image attached)${ctx.text ? `\n\n> ${ctx.text}` : ''}\n\n${typed || 'Explain what is in this marked area.'}`
+      : `**About Eq. (${ctx.label}), PDF page ${ctx.page}** (image of the equation attached)\n\n${typed || 'Explain this equation: what each term means and how the paper uses it.'}`;
   const image = ctx?.image;
   if (!pages.some(p => p.text.trim())) { notice('This PDF has no extractable text. Use OCR first.'); return; }
   if (!session?.configured) { notice('Add your OpenAI API key in Settings first.'); $('#open-settings').click(); return; }
@@ -531,7 +526,7 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') hidePop(); }
 
 for (const ev of ['pointerup', 'blur']) (ev === 'blur' ? window : document).addEventListener(ev, () => document.querySelectorAll('.textLayer.selecting').forEach(l => l.classList.remove('selecting')));
 $('#pdf').addEventListener('mouseup', e => {
-  if ($('#manual').open || e.button !== 0) return;
+  if ($('#manual').open || e.button !== 0 || marking || Date.now() - markedAt < 400) return;
   setTimeout(() => {
     const sel = getSelection(), text = sel.toString().replace(/\s+/g, ' ').trim();
     const el = sel.anchorNode?.parentElement?.closest('.pdf-page');
@@ -540,9 +535,12 @@ $('#pdf').addEventListener('mouseup', e => {
       if (hit?.eq) showPop(e.clientX, e.clientY, `Ask AI about Eq. (${hit.eq.label}) ↗`, () => attachEquation(hit.eq));
       return;
     }
-    const r = sel.getRangeAt(0).getBoundingClientRect();
-    const page = Number(el.dataset.page);
-    showPop(r.left + r.width / 2, r.bottom, 'Ask AI about this ↗', () => { setContext({kind: 'passage', page, text: text.slice(0, 3000)}); sel.removeAllRanges(); });
+    const range = sel.getRangeAt(0), r = range.getBoundingClientRect();
+    const page = Number(el.dataset.page), box = selectionBox(range, el);
+    showPop(r.left + r.width / 2, r.bottom, 'Ask AI about this ↗', async () => {
+      sel.removeAllRanges();
+      setContext({kind: 'passage', page, text: text.slice(0, 3000), box, image: box ? await cropRegion(page, box) : null});
+    });
   }, 0);
 });
 // Outline an equation under the pointer so it reads as clickable.
@@ -551,7 +549,7 @@ $('#pdf').addEventListener('mousemove', e => {
   if (hoverFrame) return;
   hoverFrame = requestAnimationFrame(() => {
     hoverFrame = 0;
-    const hit = $('#manual').open || e.buttons ? null : pageHit(e);
+    const hit = $('#manual').open || marking || e.buttons ? null : pageHit(e);
     const old = document.querySelector('.eq-hover');
     if (!hit?.eq) { old?.remove(); document.querySelectorAll('.eq-hot').forEach(x => x.classList.remove('eq-hot')); return; }
     if (old?.eq === hit.eq) return;
@@ -567,24 +565,103 @@ $('#pdf').onclick = e => {
   $('#map-page').value = el.dataset.page;
   $('#map-y').value = Math.round((e.clientY - el.getBoundingClientRect().top) / el.clientHeight * 100);
 };
-// Crop the equation from a fresh high-resolution render, since extracted text garbles math.
-async function attachEquation(eq) {
-  const page = await doc.getPage(eq.page), scale = 3, vp = page.getViewport({scale});
+// Crop part of a page from a fresh high-resolution render: extracted text drops overbars, hats,
+// fraction layout and other symbols, so attachments carry an image of the area as well.
+async function cropRegion(pageNum, box, pad = 6) {
+  const page = await doc.getPage(pageNum), base = page.getViewport({scale: 1});
+  const wPts = (box.x1 - box.x0) * base.width, scale = Math.min(3, Math.max(1.5, 1600 / Math.max(1, wPts)));
+  const vp = page.getViewport({scale});
   const full = h('canvas', {width: Math.floor(vp.width), height: Math.floor(vp.height)});
   await page.render({canvasContext: full.getContext('2d'), viewport: vp}).promise;
-  const pad = 6, x = Math.max(0, eq.box.x0 * vp.width - pad), y = Math.max(0, eq.box.y0 * vp.height - pad);
-  const w = Math.min(vp.width - x, (eq.box.x1 - eq.box.x0) * vp.width + 2 * pad), hh = Math.min(vp.height - y, (eq.box.y1 - eq.box.y0) * vp.height + 2 * pad);
-  const k = Math.min(1, 1600 / w), out = h('canvas', {width: Math.round(w * k), height: Math.round(hh * k)}), c = out.getContext('2d');
+  const x = Math.max(0, box.x0 * vp.width - pad), y = Math.max(0, box.y0 * vp.height - pad);
+  const w = Math.min(vp.width - x, (box.x1 - box.x0) * vp.width + 2 * pad), hh = Math.min(vp.height - y, (box.y1 - box.y0) * vp.height + 2 * pad);
+  const k = Math.min(1, 1600 / w, 2000 / hh), out = h('canvas', {width: Math.round(w * k), height: Math.round(hh * k)}), c = out.getContext('2d');
   c.fillStyle = '#fff'; c.fillRect(0, 0, out.width, out.height); c.drawImage(full, x, y, w, hh, 0, 0, out.width, out.height);
-  setContext({kind: 'equation', page: eq.page, label: eq.label, image: out.toDataURL('image/png')});
+  const png = out.toDataURL('image/png');
+  return png.length <= 1_500_000 ? png : out.toDataURL('image/jpeg', 0.9); // stay under the server's 2 MB limit
+}
+async function attachEquation(eq) {
+  setContext({kind: 'equation', page: eq.page, label: eq.label, box: eq.box, image: await cropRegion(eq.page, eq.box)});
+}
+// Normalised box of a text selection on one page (selections spanning pages are clipped to the first).
+function selectionBox(range, el) {
+  const pr = el.getBoundingClientRect();
+  const rects = [...range.getClientRects()].filter(r => r.width > 1 && r.height > 1 && r.bottom > pr.top && r.top < pr.bottom);
+  if (!rects.length) return null;
+  const c = v => Math.min(1, Math.max(0, v));
+  return {x0: c((Math.min(...rects.map(r => r.left)) - pr.left) / pr.width), y0: c((Math.min(...rects.map(r => r.top)) - pr.top) / pr.height),
+    x1: c((Math.max(...rects.map(r => r.right)) - pr.left) / pr.width), y1: c((Math.max(...rects.map(r => r.bottom)) - pr.top) / pr.height)};
+}
+// Where on the page a box is, in words the model can use ("upper right of the page, x 52–94%, y 12–20%").
+function describeBox(b) {
+  const cx = (b.x0 + b.x1) / 2, cyy = (b.y0 + b.y1) / 2, pct = v => Math.round(v * 100);
+  const v = cyy < 0.34 ? 'upper' : cyy > 0.66 ? 'lower' : 'middle', hz = b.x1 - b.x0 > 0.6 ? 'full width' : cx < 0.42 ? 'left' : cx > 0.58 ? 'right' : 'centre';
+  return `${v} ${hz} of the page, x ${pct(b.x0)}–${pct(b.x1)}%, y ${pct(b.y0)}–${pct(b.y1)}%`;
+}
+// Text of the items inside a box, in reading order (it helps the model, but the image is authoritative).
+function textInBox(pageNum, b) {
+  const el = $(`.pdf-page[data-page="${pageNum}"]`), W = Number(el.dataset.width), H = Number(el.dataset.height);
+  const inside = (pageBoxes[pageNum] || []).filter(t => { const x = (t.x0 + t.x1) / 2 / W, y = (t.y0 + t.y1) / 2 / H; return t.s.trim() && x >= b.x0 && x <= b.x1 && y >= b.y0 && y <= b.y1; });
+  inside.sort((a, c) => Math.abs(a.y0 - c.y0) > 3 ? a.y0 - c.y0 : a.x0 - c.x0);
+  return inside.map(t => t.s).join(' ').replace(/\s+/g, ' ').trim().slice(0, 1500);
+}
+
+// ---------- marker: drag a box over any area of the page ----------
+let marking = false, draft = null, markedAt = 0;
+function setMarking(on) {
+  marking = on; $('#pdf').classList.toggle('marking', on); $('#marker').classList.toggle('active', on); $('#marker').setAttribute('aria-pressed', on);
+  if (on) { hidePop(); notice('Marker: drag a box over the part of the page you want to ask about. Esc cancels.'); }
+  if (!on && draft) { draft.div.remove(); draft = null; }
+}
+$('#marker').onclick = () => setMarking(!marking);
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && marking) setMarking(false); });
+$('#pdf').addEventListener('pointerdown', e => {
+  if (!marking || e.button !== 0) return;
+  const el = e.target.closest('.pdf-page'); if (!el) return;
+  e.preventDefault();
+  const r = el.getBoundingClientRect(), u = (e.clientX - r.left) / r.width, v = (e.clientY - r.top) / r.height;
+  draft = {el, u, v, div: h('div', {className: 'marker-box draft'})};
+  placeBox(draft.div, {x0: u, y0: v, x1: u, y1: v}); el.append(draft.div);
+  $('#pdf').setPointerCapture(e.pointerId);
+});
+$('#pdf').addEventListener('pointermove', e => {
+  if (!draft) return;
+  const r = draft.el.getBoundingClientRect(), c = v => Math.min(1, Math.max(0, v));
+  const u = c((e.clientX - r.left) / r.width), v = c((e.clientY - r.top) / r.height);
+  draft.box = {x0: Math.min(draft.u, u), y0: Math.min(draft.v, v), x1: Math.max(draft.u, u), y1: Math.max(draft.v, v)};
+  placeBox(draft.div, draft.box);
+});
+$('#pdf').addEventListener('pointerup', e => {
+  if (!draft) return;
+  const {el, box, div} = draft; draft = null; markedAt = Date.now();
+  const r = el.getBoundingClientRect();
+  if (!box || (box.x1 - box.x0) * r.width < 12 || (box.y1 - box.y0) * r.height < 8) { div.remove(); return; } // a click, not a box
+  setMarking(false); div.classList.remove('draft');
+  const page = Number(el.dataset.page);
+  showPop(e.clientX, e.clientY, 'Ask AI about this area ↗', async () => {
+    div.remove();
+    setContext({kind: 'region', page, box, where: describeBox(box), text: textInBox(page, box), image: await cropRegion(page, box)});
+    notice(`Marked area on PDF page ${page} attached. Ask your question, or press Enter to have it explained.`);
+  });
+  // If the pop is dismissed without asking, drop the outline too.
+  const drop = ev => { if (!ev.target.closest('#pdf-pop')) { div.remove(); document.removeEventListener('mousedown', drop, true); } };
+  setTimeout(() => document.addEventListener('mousedown', drop, true), 0);
+});
+// Keep the attached area outlined on the page while composing.
+function showContextMark(c) {
+  document.querySelectorAll('.marker-box.attached').forEach(x => x.remove());
+  if (!c?.box) return;
+  const el = $(`.pdf-page[data-page="${c.page}"]`); if (!el) return;
+  const d = h('div', {className: 'marker-box attached', title: 'Attached to your next question'}); placeBox(d, c.box); el.append(d);
 }
 function setContext(c) {
   context = c;
   const box = $('#context'); box.hidden = !c; box.replaceChildren();
-  $('#question').placeholder = !c ? 'What would you like to understand?' : c.kind === 'passage' ? 'Ask about this passage… (or press Enter to have it explained)' : 'Ask about this equation… (or press Enter to have it explained)';
+  $('#question').placeholder = !c ? 'What would you like to understand?' : `Ask about this ${c.kind === 'passage' ? 'passage' : c.kind === 'region' ? 'area' : 'equation'}… (or press Enter to have it explained)`;
+  showContextMark(c);
   if (!c) return;
-  if (c.image) box.append(h('img', {src: c.image, alt: `Eq. (${c.label})`}));
-  box.append(h('div', {className: 'ctx-info'}, h('small', {textContent: c.kind === 'passage' ? `PASSAGE · PDF PAGE ${c.page}` : `EQ. (${c.label}) · PDF PAGE ${c.page}`}), ...(c.text ? [h('span', {textContent: `“${c.text.length > 220 ? c.text.slice(0, 220) + '…' : c.text}”`})] : [])),
+  if (c.image) box.append(h('img', {src: c.image, alt: c.kind === 'equation' ? `Eq. (${c.label})` : 'Attached area of the page'}));
+  box.append(h('div', {className: 'ctx-info'}, h('small', {textContent: c.kind === 'passage' ? `PASSAGE · PDF PAGE ${c.page}` : c.kind === 'region' ? `MARKED AREA · PDF PAGE ${c.page}` : `EQ. (${c.label}) · PDF PAGE ${c.page}`}), ...(c.text ? [h('span', {textContent: `“${c.text.length > 220 ? c.text.slice(0, 220) + '…' : c.text}”`})] : [])),
     h('button', {type: 'button', className: 'icon del', textContent: '×', title: 'Remove attachment', onclick: () => setContext(null)}));
   controls();
 }

@@ -27,3 +27,6 @@ test('chat titles use the question, not the attachment header', () => {
   assert.equal(chatTitle('**About Eq. (9), PDF page 3** (image of the equation attached)\n\nWhat does C_c select?'), 'Eq. (9): What does Cc select?');
   assert.equal(chatTitle('> some passage\n>\n> — PDF page 7\n\nWhy is this true?'), 'Passage: Why is this true?');
 });
+test('chat title for a marked area', () => {
+  assert.equal(chatTitle('**About a marked area on PDF page 4** (upper left of the page, x 10–40%, y 20–30%; image attached)\n\n> text\n\nWhat is this?'), 'Area p. 4: What is this?');
+});
