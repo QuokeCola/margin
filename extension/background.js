@@ -2,7 +2,7 @@
 // papers Margin asked for, downloads the PDF with the browser's own logins and sends it to Margin.
 const PORTS = [47317, 4317];            // desktop app, browser version
 // State that must survive the worker being restarted (Chrome stops idle workers at any time).
-const state = {tabs: {}, navigated: {}, tries: {}};   // tabId -> request id; request id -> true; request id -> count
+const state = {tabs: {}, navigated: {}, tries: {}, pdfSeen: {}};   // tabId -> request id; request id -> true / count; request id -> {url, at} of a PDF that opened in its tab
 const loaded = chrome.storage.session.get('state').then(r => Object.assign(state, r.state || {}));
 const save = () => chrome.storage.session.set({state});
 const tabRequests = {get: id => state.tabs[id], has: id => id in state.tabs, set: (id, rid) => { state.tabs[id] = rid; save(); }, delete: id => { delete state.tabs[id]; save(); }};
@@ -138,6 +138,7 @@ chrome.webRequest.onHeadersReceived.addListener(details => {
     const req = (await pending()).find(r => r.id === tabRequests.get(details.tabId));
     if (!req) return;
     note(req.id, {stage: 'pdf-in-tab', url: details.url});
+    state.pdfSeen[req.id] = {url: details.url, at: Date.now()}; save();
     tried.get(req.id)?.delete(details.url);
     await tryCandidates(req, [details.url], details.initiator, {force: true}); // the PDF itself, once
   })();
@@ -160,3 +161,26 @@ async function sendTab(tabId) {
   }
   return {ok: false, error: 'No PDF found on this page (you may need to sign in first).'};
 }
+
+// The browser's own download of the paper. Publishers (ScienceDirect) refuse a second, background download
+// of the same PDF, so when Chrome finishes downloading a PDF that belongs to a pending request, tell Margin
+// where the file is; Margin, running on this computer, reads it (only recent .pdf files that are real PDFs).
+const base = u => String(u || '').split('?')[0];
+chrome.downloads.onChanged.addListener(async delta => {
+  if (delta.state?.current !== 'complete') return;
+  await loaded;
+  const [item] = await chrome.downloads.search({id: delta.id});
+  if (!item || !/\.pdf$/i.test(item.filename || '')) return;
+  const reqs = await pending();
+  const recent = Object.entries(state.pdfSeen).filter(([, v]) => Date.now() - v.at < 10 * 60e3);
+  const match = recent.find(([, v]) => [item.url, item.finalUrl].some(u => base(u) === base(v.url)))
+    || (recent.length === 1 && reqs.length === 1 && reqs[0].id === recent[0][0] ? recent[0] : null);
+  const req = match && reqs.find(r => r.id === match[0]);
+  if (!req || finished.has(req.id)) return;
+  note(req.id, {stage: 'download', file: item.filename, size: item.fileSize});
+  try {
+    const r = await call(`/api/ext/requests/${req.id}/file`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({path: item.filename})});
+    if (r.ok) { finished.add(req.id); note(req.id, {stage: 'delivered', file: item.filename}); }
+    else note(req.id, {stage: 'error', error: (await r.json().catch(() => ({}))).error || `HTTP ${r.status}`});
+  } catch (e) { note(req.id, {stage: 'error', error: e.message}); }
+});

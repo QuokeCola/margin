@@ -3,7 +3,7 @@ import express from 'express';
 import OpenAI from 'openai';
 import {randomBytes, timingSafeEqual, createHash} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
-import {dirname, join} from 'node:path';
+import {dirname, join, isAbsolute} from 'node:path';
 import {homedir} from 'node:os';
 import {mkdir, readFile, writeFile, rename, readdir, rm, stat} from 'node:fs/promises';
 import {KEY_PATTERN, MODEL_PATTERN, PAPER_ID, CHAT_ID, updateEnvText, isTextModel, keyHint, cleanName, chatTitle} from './lib/config.mjs';
@@ -58,6 +58,21 @@ app.post('/api/ext/requests/:rid/pdf', extAuth, express.raw({type: 'application/
   try { r.paper = await addPdfToProject(buf, r.projectId, {openalexId: r.openalexId, doi: r.doi, filename: r.doi || r.title}); r.status = 'done'; res.json({ok: true}); }
   catch (e) { res.status(400).json({error: e.message}); }
 });
+// The browser downloaded the PDF itself (some publishers refuse a second download): read that file.
+// Only a .pdf file changed in the last 10 minutes that really is a PDF, for a request that is waiting.
+app.post('/api/ext/requests/:rid/file', extAuth, express.json({limit: '8kb'}), async (req, res) => {
+  const r = fetchRequests.get(req.params.rid);
+  if (!r || r.status !== 'pending') return res.status(404).json({error: 'This request is no longer waiting for a PDF.'});
+  const file = String(req.body?.path || '');
+  if (!isAbsolute(file) || !/\.pdf$/i.test(file)) return res.status(400).json({error: 'Not a PDF file path.'});
+  const st = await stat(file).catch(() => null);
+  if (!st?.isFile() || Date.now() - st.mtimeMs > 10 * 60e3 || st.size > 60 * 1024 * 1024) return res.status(400).json({error: 'That file is not a recent download.'});
+  const buf = await readFile(file);
+  if (buf.subarray(0, 5).toString() !== '%PDF-') return res.status(415).json({error: 'Not a PDF.'});
+  try { r.paper = await addPdfToProject(buf, r.projectId, {openalexId: r.openalexId, doi: r.doi, filename: r.doi || r.title}); r.status = 'done'; res.json({ok: true}); }
+  catch (e) { res.status(400).json({error: e.message}); }
+});
+
 // "Send this PDF to Margin" from any page: goes to the project used last.
 app.post('/api/ext/pdf', extAuth, express.raw({type: 'application/pdf', limit: '61mb'}), async (req, res) => {
   const buf = req.body;

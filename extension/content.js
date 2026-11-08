@@ -46,6 +46,7 @@ function collect() {
     if (a.closest('header, footer, nav, aside, [role="navigation"], [role="banner"], [role="contentinfo"]')) continue;
     const text = (a.textContent || '').trim().toLowerCase(), href = a.getAttribute('href') || '';
     if (/flyer|brochure|guide|instruction|template|poster|catalog|policy|terms|licen[cs]e/i.test(href + ' ' + text)) continue;
+    if (/^https?:\/\/([^/]*\.)?(google|scholar\.google|bing|semanticscholar)\./i.test(abs(href) || '')) continue; // redirectors, not the PDF
     const saysPdf = /^(download|view|get|open)?\s*(full[- ]text\s*|article\s*)?pdf\b|download (article|paper)|^pdf$/.test(text);
     const pdfLike = /\.pdf($|\?)|\/pdf(\/|$|\?)|pdfft/i.test(href);
     if ((saysPdf || pdfLike) && own(href)) add(href);
