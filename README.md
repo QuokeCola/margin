@@ -50,7 +50,7 @@ npm run dev          # then open http://127.0.0.1:4317
 
 In browser mode the key is saved to `.env` in the project folder (mode 600); `PORT` in `.env` changes the port. Hand edits to `.env` need a server restart. `npm run build && npm start` serves the built version.
 
-Build installers with `npm run dist:linux`, `npm run dist:win` (works on Linux with Wine) or `npm run dist:mac` (macOS only). Pushing a tag such as `v1.0.1` runs `.github/workflows/release.yml`, which builds all four on Linux, Windows and macOS runners and publishes a GitHub Release.
+The packaged app ships only the `en-US` and `en-GB` Chromium locales (`electronLanguages` in `package.json`) and only pdf.js's `legacy/build` files the server uses (the page's pdf.js is bundled into `dist/` by Vite). Build installers with `npm run dist:linux`, `npm run dist:win` (works on Linux with Wine) or `npm run dist:mac` (macOS only). Pushing a tag such as `v1.0.1` runs `.github/workflows/release.yml`, which builds all four on Linux, Windows and macOS runners and publishes a GitHub Release.
 
 ## Study workflow
 
@@ -92,8 +92,9 @@ npm test
 npm run build
 ```
 
-- `electron/main.mjs`: desktop shell; starts the server on a free local port and opens the window.
-- `lib/store.mjs`: projects, shared paper store, chats, and the 1.x migration.
+- `electron/main.mjs`: desktop shell; starts the server in an Electron utility process on a free local port and opens the window.
+- `lib/store.mjs`: projects, shared paper store, chats (with a per-project `chats-index.json` summary cache), and the 1.x migration.
+- `lib/project-index.mjs`, `lib/pdf-text.mjs`, `lib/extract-worker.mjs`: project-chat search index; PDF text is extracted by pdf.js in worker threads.
 - `lib/metadata.mjs`: OpenAlex/Crossref lookup and DOI/title helpers.
 - `src/map.js`: the citation map (d3-force layout in SVG, filters, timeline, expand).
 - `src/bib.js`: numbered bibliographies, in-text citation markers, matching entries to OpenAlex records.

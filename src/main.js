@@ -1,17 +1,23 @@
 import * as pdfjs from 'pdfjs-dist';
 import worker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
-import {marked} from 'marked';
-import DOMPurify from 'dompurify';
-import renderMath from 'katex/contrib/auto-render';
+// KaTeX's stylesheet stays in the main bundle (before style.css, which overrides parts of it);
+// its fonts load only when an equation is shown. The Markdown/maths code loads with the first chat.
 import 'katex/dist/katex.min.css';
 import './style.css';
 import {parseReferences, resolveReference, TOKEN, tokenRef, findMentions, tagOf, QUOTE, ANCHOR, quoteRef, structuredRefs} from './references.js';
 import {paperLabels, resolvePaper, shortId} from '../lib/labels.mjs';
-import {findQuote, textBoxes, detectEquations} from './layout.js';
+import {textBoxes, detectEquations} from './layout.js';
+import {preparePage, locateQuote} from './quote.js';
 import {parseBibliography, findMarkers, matchEntries} from './bib.js';
-import {createMap} from './map.js';
-import {clampZoom, wheelZoomFactor} from './zoom.js';
+import {clampZoom, wheelZoomFactor, zoomAnchor, pinchStep} from './zoom.js';
+import {applyTheme, getThemePref, setThemePref} from './theme.js';
 pdfjs.GlobalWorkerOptions.workerSrc = worker;
+applyTheme();
+let marked, DOMPurify, renderMath, markdownLoading = null;
+const loadMarkdown = () => markdownLoading ??= Promise.all([import('marked'), import('dompurify'), import('katex/contrib/auto-render')])
+  .then(([m, d, k]) => { marked = m.marked; DOMPurify = d.default; renderMath = k.default; })
+  .catch(e => { markdownLoading = null; throw e; });
+const idle = (f, timeout = 300) => window.requestIdleCallback ? requestIdleCallback(f, {timeout}) : setTimeout(f, 16);
 const $ = s => document.querySelector(s);
 const h = (tag, props = {}, ...kids) => { const el = Object.assign(document.createElement(tag), props); el.append(...kids); return el; };
 
@@ -39,13 +45,15 @@ $('#app').innerHTML = `<header><button id="toggle-library" class="icon" title="S
 <ol class="setup-steps"><li>In Chrome (or Edge/Brave), open <code>chrome://extensions</code> and turn on <b>Developer mode</b>.</li><li>Click <b>Load unpacked</b> and choose this folder: <code id="ext-folder">…</code> <button type="button" class="small" id="ext-copy-folder">Copy</button></li><li>Click the Margin icon in the toolbar and paste the pairing code: <code id="ext-code">••••••</code> <button type="button" class="small" id="ext-show">Show code</button></li></ol></div>
 <label>Model<select id="settings-model"></select></label><label>…or type a model ID<input id="custom-model" autocomplete="off" spellcheck="false" placeholder="e.g. gpt-5.2"></label>
 <p class="hint">Stored only on this computer, in a file readable only by you, and applied immediately. A new key is checked with OpenAI before it is saved; it is sent only to OpenAI.</p>
+<label>Theme<select id="theme" title="Applied right away; kept in this app's browser storage"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
 <p id="settings-msg" role="status"></p><div class="dialog-buttons"><button type="button" id="settings-cancel">Cancel</button><button type="submit" id="settings-save" class="primary">Save</button></div></form></dialog>`;
 
 let session = null, models = [], projects = [], project = null, paper = null, chat = null; // project: {id, name, papers, chats}
 let doc = null, pages = [], index = {}, overrides = {};
-let pageBoxes = {}, eqByPage = {}, context = null;
+let pageBoxes = {}, eqByPage = {}, quotePages = {}, context = null; // quotePages: pages prepared for quote search
 let bib = {start: null, entries: new Map()}, refHits = {}, refRecords = [], refByNum = new Map(), refsState = 'idle'; // references of the open paper // text-item geometry and detected equations per page; pending attachment
 let working = false, loading = false, generation = 0, activeRef = null, renderQueue = Promise.resolve();
+let chatShown = 0; // which showChat/showWelcome is current (older messages are added in the background)
 let webSearch = false; // per launch: answers may use OpenAI web search when switched on
 const isProjectChat = c => c?.scope === 'project';
 let zoom = 1;
@@ -108,6 +116,7 @@ $('#open-settings').onclick = () => {
   $('#key-hint').textContent = session?.configured ? `A key is saved (${session.keyHint}). Leave blank to keep it.` : 'No key saved yet.';
   const ids = [...new Set([session?.model, ...models].filter(Boolean))];
   $('#settings-model').replaceChildren(...ids.map(id => h('option', {value: id, textContent: id, selected: id === session?.model})));
+  $('#theme').value = getThemePref();
   $('#settings').showModal(); $('#key').focus();
   api('/api/extension').then(x => {
     $('#ext-folder').textContent = x.folder; $('#ext-code').textContent = x.paired ? '••••••' : '(not created yet)';
@@ -115,6 +124,7 @@ $('#open-settings').onclick = () => {
   }).catch(() => {});
 };
 $('#settings-cancel').onclick = () => $('#settings').close();
+$('#theme').onchange = e => setThemePref(e.target.value);
 $('#ext-show').onclick = async () => { try { const {code} = await api('/api/extension/pairing', {body: {}}); $('#ext-code').textContent = code; navigator.clipboard?.writeText(code).then(() => toast('Pairing code copied.')).catch(() => {}); } catch (e) { toast(e.message); } };
 $('#ext-copy-folder').onclick = () => navigator.clipboard?.writeText($('#ext-folder').textContent).then(() => toast('Folder path copied.')).catch(() => {});
 $('#settings-form').onsubmit = async e => {
@@ -271,9 +281,39 @@ function showChat(c) {
   if (!c.messages.length) $('#messages').append(h('div', {className: 'chat-empty'},
     h('p', {textContent: whole ? `Ask across all ${project.papers.length} paper${project.papers.length === 1 ? '' : 's'} of “${project.name}”. Margin searches them for the passages that matter; each citation names its paper, and selecting it opens that paper at the passage.` : 'Ask anything about this paper. Answers cite PDF pages and equations; select a citation to bring the source into view.'}),
     h('button', {className: 'suggestion', textContent: whole ? 'Compare the main contributions and assumptions of these papers.' : 'Summarize the main contributions of this paper.', onclick: e => { $('#question').value = e.target.textContent; $('#question').focus(); }})));
-  for (const m of c.messages) addMessage(m.role, m.content, m, false);
-  $('#messages').scrollTop = $('#messages').scrollHeight;
+  const token = ++chatShown;
+  if (c.messages.length) showMessages(c, token);
   renderLibrary(); controls();
+}
+// Long chats: the newest messages are rendered first and the chat scrolled to the end as before;
+// older ones are added above in idle time, keeping the visible part in place.
+const FIRST_MESSAGES = 6, FIRST_CHARS = 8000;
+async function showMessages(c, token) {
+  if (!marked) {
+    try { await loadMarkdown(); } catch (e) { notice('Could not load the chat view: ' + e.message); return; }
+    if (token !== chatShown) return;
+  }
+  const box = $('#messages'), msgs = c.messages, first = [];
+  let i = msgs.length, chars = 0;
+  while (i > 0 && (first.length < 2 || (first.length < FIRST_MESSAGES && chars < FIRST_CHARS))) { const m = msgs[--i]; chars += m.content.length; first.unshift(buildMessage(m.role, m.content, m, false)); }
+  box.append(...first);
+  box.scrollTop = box.scrollHeight;
+  if (!i) return;
+  // Start once the scroll to the end has finished (scroll-behavior is smooth).
+  await new Promise(res => { const t = setTimeout(res, 1000); box.addEventListener('scrollend', () => { clearTimeout(t); res(); }, {once: true}); if (box.scrollTop + box.clientHeight >= box.scrollHeight - 1) { clearTimeout(t); res(); } });
+  const step = deadline => {
+    if (token !== chatShown) return;
+    const items = [], t0 = performance.now();
+    do { const m = msgs[--i], el = buildMessage(m.role, m.content, m, false); el.classList.add('lazy'); items.unshift(el); }
+    while (i > 0 && (deadline && !deadline.didTimeout ? deadline.timeRemaining() > 4 : performance.now() - t0 < 8));
+    const fromEnd = box.scrollHeight - box.scrollTop; // the content below the top edge stays where it is
+    box.style.overflowAnchor = 'none';
+    box.prepend(...items);
+    box.scrollTo({top: box.scrollHeight - fromEnd, behavior: 'instant'});
+    box.style.overflowAnchor = '';
+    if (i > 0) idle(step);
+  };
+  idle(step);
 }
 $('#new-chat-side').onclick = e => openChatMenu(e.currentTarget);
 
@@ -349,6 +389,7 @@ $('#info-lookup').onclick = async () => {
   renderInfo();
 };
 function showWelcome() {
+  chatShown++; // stop adding older messages of a chat that was on screen
   $('#messages').replaceChildren(h('div', {className: 'welcome', innerHTML: `<span class="eyebrow">ROBOTICS / PAPER COMPANION</span><h2>Follow the reasoning.<br>Keep the source in sight.</h2><p>Study papers with the original equations beside every explanation. Papers are grouped into projects, each with its own chats.</p><div class="steps"><p><b>01</b> Add a PDF to the project, or pick one in the sidebar.</p><p><b>02</b> Ask a question; start more chats any time.</p><p><b>03</b> Select a citation, or scroll the chat to follow it.</p></div>`}));
   $('#chat-title').textContent = 'Read. Question. Understand.'; showPaperHeader();
 }
@@ -365,8 +406,9 @@ async function closePaper({keepChat = false} = {}) {
   await renderQueue.catch(() => {});
   await destroyDoc();
   if (!keepChat) chat = null;
-  doc = null; paper = null; pages = []; index = {}; overrides = {}; activeRef = null; pageBoxes = {}; eqByPage = {}; setContext(null); hidePop(); setMarking(false); hideRefCard();
+  doc = null; paper = null; pages = []; index = {}; overrides = {}; activeRef = null; pageBoxes = {}; eqByPage = {}; quotePages = {}; setContext(null); hidePop(); setMarking(false); hideRefCard();
   bib = {start: null, entries: new Map()}; refHits = {}; refRecords = []; refByNum = new Map(); refsState = 'idle';
+  endPinch(false); pageObserver.disconnect(); nearPages.clear();
   $('#pdf').replaceChildren(h('div', {className: 'empty', innerHTML: '<div class="paper-icon">∑</div><h2>Make room for the original.</h2><p>Add a PDF from your laptop, or pick a paper from the library.</p>'}));
   $('#total').textContent = '/ —';
   if (keepChat && chat) showPaperHeader(); else showWelcome();
@@ -397,6 +439,7 @@ async function openPaper(id, bytes, chatId, {keepChat = isProjectChat(chat) && !
     loading = true; controls();
     const gen = generation;
     notice('Opening paper…');
+    loadMarkdown().catch(() => {}); // its chat follows; have the Markdown/maths code ready
     const meta = await api(`/api/papers/${id}`);
     bytes ??= await api(`/api/papers/${id}/pdf`, {binary: true});
     paper = meta; overrides = meta.overrides || {};
@@ -406,7 +449,7 @@ async function openPaper(id, bytes, chatId, {keepChat = isProjectChat(chat) && !
       if (Object.keys(old).length) { overrides = (await api(`/api/papers/${id}`, {method: 'PATCH', body: {overrides: old}})).overrides; localStorage.removeItem('margin-' + id); }
     } catch {}
     showPaperHeader(); renderLibrary();
-    $('#pdf').replaceChildren();
+    $('#pdf').replaceChildren(h('div', {id: 'pages'})); // the page column (scaled as a whole during a pinch)
     doc = await pdfjs.getDocument({data: bytes}).promise;
     if (doc.numPages > 300) throw Error('This reader supports up to 300 pages.');
     $('#total').textContent = '/ ' + doc.numPages; $('#page').max = doc.numPages; $('#map-page').max = doc.numPages;
@@ -424,7 +467,7 @@ async function openPaper(id, bytes, chatId, {keepChat = isProjectChat(chat) && !
       }
       const el = h('div', {className: 'pdf-page'}, h('span', {className: 'page-badge', textContent: n}));
       el.dataset.page = n; el.dataset.width = vp.width; el.dataset.height = vp.height; sizePage(el);
-      $('#pdf').append(el); pageObserver.observe(el);
+      $('#pages').append(el); pageObserver.observe(el);
     }
     const mine = project.chats.filter(c => !isProjectChat(c) && c.paperId === id), pick = mine.find(c => c.id === chatId) || mine[0];
     if (keepChat && chat) showPaperHeader();
@@ -438,20 +481,27 @@ async function openPaper(id, bytes, chatId, {keepChat = isProjectChat(chat) && !
 // ---------- rendering & zoom ----------
 function sizePage(el) { el.style.width = Number(el.dataset.width) * zoom + 'px'; el.style.height = Number(el.dataset.height) * zoom + 'px'; el.style.setProperty('--total-scale-factor', zoom); }
 const MAX_CANVAS_PIXELS = 12e6; // keeps a single page bitmap under ~48 MB at high zoom
+// Pages within 800 px of the view are rendered; the others are freed. A page that leaves that band
+// while it waits in the render queue is skipped, and one that leaves while rendering is dropped,
+// so fast scrolling and long smooth jumps do not leave far pages rendered.
+const nearPages = new Set();
+const freePage = el => { el.querySelector('canvas')?.remove(); el.querySelector('.textLayer')?.remove(); delete el.dataset.rendered; };
 const pageObserver = new IntersectionObserver(entries => entries.forEach(e => {
-  if (e.isIntersecting) queueRender(e.target);
-  else { e.target.querySelector('canvas')?.remove(); e.target.querySelector('.textLayer')?.remove(); delete e.target.dataset.rendered; } // free far-away pages
+  if (e.isIntersecting) { nearPages.add(e.target); queueRender(e.target); }
+  else { nearPages.delete(e.target); freePage(e.target); } // free far-away pages
 }), {root: $('#pdf'), rootMargin: '800px'});
-function queueRender(el) {
+// force: render even if the page is not (yet) near the view, e.g. a citation's page before jumping to it.
+function queueRender(el, force = false) {
   const gen = generation;
   renderQueue = renderQueue.catch(() => {}).then(async () => {
     if (gen !== generation || !doc || Number(el.dataset.rendered) === zoom) return;
+    if (!force && !nearPages.has(el)) return;
     const z = zoom, page = await doc.getPage(Number(el.dataset.page)), base = page.getViewport({scale: 1});
     const ratio = Math.min(devicePixelRatio || 1, 2, Math.sqrt(MAX_CANVAS_PIXELS / (base.width * base.height * z * z)));
     const vp = page.getViewport({scale: z * ratio});
     const canvas = h('canvas', {width: Math.floor(vp.width), height: Math.floor(vp.height)});
     await page.render({canvasContext: canvas.getContext('2d'), viewport: vp}).promise;
-    if (gen !== generation) return;
+    if (gen !== generation || (!force && !nearPages.has(el))) return;
     const old = el.querySelector('canvas'); if (!old) canvas.className = 'fade-in';
     old?.remove(); el.prepend(canvas); el.dataset.rendered = z;
     if (!el.querySelector('.textLayer')) {
@@ -471,6 +521,7 @@ function visiblePages() {
 let rerenderTimer;
 // Resize pages around a fixed point (cursor or viewport centre) so the spot under it stays put.
 function setZoom(next, clientX, clientY) {
+  endPinch();
   next = clampZoom(next); if (next === zoom) return;
   const pdf = $('#pdf'), box = pdf.getBoundingClientRect();
   const ax = (clientX ?? box.left + box.width / 2) - box.left, ay = (clientY ?? box.top + box.height / 2) - box.top;
@@ -484,10 +535,61 @@ function setZoom(next, clientX, clientY) {
   $('#zoom-reset').textContent = Math.round(zoom * 100) + '%';
   try { localStorage.setItem('margin-zoom', zoom); } catch {}
   clearTimeout(rerenderTimer);
-  rerenderTimer = setTimeout(() => visiblePages().forEach(queueRender), 180); // sharpen after the gesture settles
+  rerenderTimer = setTimeout(() => visiblePages().forEach(el => queueRender(el)), 180); // sharpen after the gesture settles
+}
+// Pinch (Ctrl + wheel): while the gesture runs the page column is only scaled with a CSS transform
+// around the pointer; the pages get their real size once no wheel event came for PINCH_END_MS,
+// with the spot under the pointer kept in place exactly as setZoom does.
+const PINCH_END_MS = 150;
+let pinch = null; // {zoom, s, tx, ty, ax, ay, ox, oy, ...} of the running gesture
+function pinchZoom(factor, clientX, clientY) {
+  const wrap = $('#pages'), from = pinch ? pinch.zoom : zoom;
+  if (!wrap) { setZoom(from * factor, clientX, clientY); return; }
+  const next = clampZoom(from * factor); if (next === from) return;
+  const pdf = $('#pdf');
+  if (!pinch) {
+    clearTimeout(rerenderTimer);
+    const els = [...wrap.children], box = pdf.getBoundingClientRect();
+    pinch = {zoom, s: 1, tx: 0, ty: 0, box, ox: wrap.offsetLeft, oy: wrap.offsetTop, w: wrap.offsetWidth, h: wrap.offsetHeight,
+      pageW: Math.max(0, ...els.map(el => el.offsetWidth)), cw: pdf.clientWidth, ch: pdf.clientHeight};
+    pinch.after = pdf.scrollHeight - pinch.oy - pinch.h; // padding (and the last page's margin) below the column
+    wrap.style.transformOrigin = '0 0';
+  }
+  const p = pinch, sl = pdf.scrollLeft, st = pdf.scrollTop;
+  p.ax = clientX - p.box.left; p.ay = clientY - p.box.top;
+  Object.assign(p, pinchStep(p, next / from, sl + p.ax - p.ox, st + p.ay - p.oy), {zoom: next});
+  // As with real sizes: a column narrower than the view stays centred, and the column is not pulled past its ends.
+  const left = Math.max(0, (p.w - p.pageW) / 2); // the pages' left edge in the column, before scaling
+  if (p.pageW * p.s + 2 * p.ox <= p.cw) p.tx = sl + p.cw / 2 - p.ox - p.s * (left + p.pageW / 2);
+  else p.tx = Math.min(sl - p.s * left, Math.max(p.cw + sl - 2 * p.ox - p.s * (left + p.pageW), p.tx));
+  p.ty = Math.min(st, Math.max(p.ch + st - p.oy - p.after - p.s * p.h, p.ty));
+  wrap.style.transform = `translate(${p.tx}px,${p.ty}px) scale(${p.s})`;
+  $('#zoom-reset').textContent = Math.round(next * 100) + '%';
+  clearTimeout(p.timer); p.timer = setTimeout(() => endPinch(), PINCH_END_MS);
+}
+// Give the pages their real size for the zoom the pinch reached (commit false: just drop the transform).
+function endPinch(commit = true) {
+  if (!pinch) return;
+  const p = pinch; pinch = null; clearTimeout(p.timer);
+  const pdf = $('#pdf'), wrap = $('#pages');
+  if (!wrap) return;
+  if (!commit) { wrap.style.transform = ''; return; }
+  // The point under the pointer, in the unscaled layout. Offsets are read without the transform
+  // (a transformed column would be the pages' offsetParent).
+  const sl = pdf.scrollLeft, st = pdf.scrollTop;
+  pdf.style.overflowAnchor = 'none'; // the position is set below; the browser must not shift it as well
+  wrap.style.transform = '';
+  const els = [...wrap.children], rects = els.map(el => ({top: el.offsetTop, left: el.offsetLeft, width: el.offsetWidth, height: el.offsetHeight}));
+  const a = zoomAnchor(rects, (sl + p.ax - p.ox - p.tx) / p.s + p.ox, (st + p.ay - p.oy - p.ty) / p.s + p.oy);
+  zoom = p.zoom;
+  els.forEach(sizePage);
+  if (a) { const el = els[a.index]; pdf.scrollTo({left: el.offsetLeft + a.fx * el.offsetWidth - p.ax, top: el.offsetTop + a.fy * el.offsetHeight - p.ay, behavior: 'instant'}); }
+  pdf.style.overflowAnchor = '';
+  try { localStorage.setItem('margin-zoom', zoom); } catch {}
+  visiblePages().forEach(el => queueRender(el));
 }
 // Chromium reports a trackpad pinch as a wheel event with ctrlKey set.
-$('#pdf').addEventListener('wheel', e => { if (!e.ctrlKey) return; e.preventDefault(); setZoom(zoom * wheelZoomFactor(e.deltaY, e.deltaMode), e.clientX, e.clientY); }, {passive: false});
+$('#pdf').addEventListener('wheel', e => { if (!e.ctrlKey) return; e.preventDefault(); pinchZoom(wheelZoomFactor(e.deltaY, e.deltaMode), e.clientX, e.clientY); }, {passive: false});
 $('#zoom-in').onclick = () => setZoom(zoom * 1.2);
 $('#zoom-out').onclick = () => setZoom(zoom / 1.2);
 $('#zoom-reset').onclick = () => setZoom(1);
@@ -520,7 +622,7 @@ async function navigate(ref, {switchPaper = true} = {}) {
   if (!target) { notice('Equation location is missing or ambiguous. Use the correction panel to choose its page and position.'); $('#manual').open = true; $('#equation').value = ref.equation || ''; return; }
   activeRef = ref;
   const el = $(`.pdf-page[data-page="${target.page}"]`);
-  await queueRender(el);
+  await queueRender(el, true);
   const box = target.manual ? null : target.box;
   const mark = h('div', {className: 'highlight' + (box ? ' eq' : target.y == null ? ' whole' : ''), title: target.manual ? 'Manually corrected location' : target.y == null ? 'Page citation' : 'Detected equation; verify against source'});
   if (box) placeBox(mark, box); else mark.style.top = target.y == null ? '0' : Math.max(0, target.y * 100 - 3) + '%';
@@ -528,29 +630,30 @@ async function navigate(ref, {switchPaper = true} = {}) {
   notice(`${ref.equation ? 'Equation ' + ref.equation + ' · ' : ''}PDF page ${target.page}${target.manual ? ' · manual correction' : target.fallback ? ' · exact equation not located; showing page' : box ? ' · detected equation (verify visually)' : ''}`);
 }
 function placeBox(div, b) { Object.assign(div.style, {left: b.x0 * 100 + '%', top: b.y0 * 100 + '%', width: (b.x1 - b.x0) * 100 + '%', height: (b.y1 - b.y0) * 100 + '%'}); }
+// Jumps longer than JUMP_SMOOTH_SCREENS view heights are instant (a smooth scroll would pass,
+// and start rendering, every page on the way); shorter ones stay smooth.
+const JUMP_SMOOTH_SCREENS = 3;
 function showMarks(el, marks, y, page) {
+  endPinch();
   document.querySelectorAll('.pdf-page .highlight').forEach(x => x.remove());
   el.append(...marks);
-  $('#pdf').scrollTo({top: el.offsetTop + y * el.clientHeight - 100, behavior: 'smooth'});
+  const pdf = $('#pdf'), top = el.offsetTop + y * el.clientHeight - 100;
+  pdf.scrollTo({top, behavior: Math.abs(top - pdf.scrollTop) > JUMP_SMOOTH_SCREENS * pdf.clientHeight ? 'instant' : 'smooth'});
   $('#page').value = page;
+}
+// Pages of the open paper prepared for quote search (normalised text built once per page).
+function quoteIndex() {
+  return Object.keys(pageBoxes).map(Number).map(n => {
+    const el = $(`.pdf-page[data-page="${n}"]`); if (!el) return null;
+    return quotePages[n] ??= {page: n, prepared: preparePage(pageBoxes[n]), W: Number(el.dataset.width), H: Number(el.dataset.height)};
+  }).filter(Boolean);
 }
 // Highlight the quoted words; search the cited page first, then the rest of the paper.
 // Highlight the cited or quoted words. The cited page wins if it matches well; otherwise the
 // closest match anywhere in the paper is used (models sometimes cite a neighbouring page).
 async function navigateQuote(ref) {
   const what = ref.anchor ? 'Cited text' : 'Quoted text';
-  const find = n => { const el = $(`.pdf-page[data-page="${n}"]`); return pageBoxes[n] && el ? findQuote(pageBoxes[n], ref.quote, Number(el.dataset.width), Number(el.dataset.height)) : null; };
-  let best = null, bestPage = null;
-  const own = find(ref.page);
-  if (own && own.dist <= 0.1) { best = own; bestPage = ref.page; }
-  else {
-    if (own) { best = own; bestPage = ref.page; }
-    for (const n of Object.keys(pageBoxes).map(Number)) {
-      if (n === ref.page) continue;
-      const r = find(n);
-      if (r && (!best || r.dist < best.dist - 0.02)) { best = r; bestPage = n; }
-    }
-  }
+  const found = locateQuote(quoteIndex(), ref.page, ref.quote), best = found?.rects, bestPage = found?.page;
   if (!best) {
     await navigate({page: ref.page});
     notice(`The cited words were not found in the extracted text; showing PDF page ${ref.page}.`);
@@ -558,7 +661,7 @@ async function navigateQuote(ref) {
   }
   activeRef = ref;
   const el = $(`.pdf-page[data-page="${bestPage}"]`);
-  await queueRender(el);
+  await queueRender(el, true);
   showMarks(el, best.map(r => { const d = h('div', {className: 'highlight text', title: what}); placeBox(d, r); return d; }), best[0].y0, bestPage);
   notice(`${what} · PDF page ${bestPage}${bestPage !== ref.page ? ` (cited as page ${ref.page})` : ''}${best.dist > 0 ? ' · close match' : ''}`);
 }
@@ -573,7 +676,36 @@ const MATH = /\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\$\$[\s\S]*?\$\$/g;
 // [[eq:..]] tokens become inline chips, a chip (or \tag{n}) right after a display
 // equation makes the whole equation a link, and plain "Eq. (61)" / "p. 4" text is linked.
 // In project chats (whole = true) plain-text mentions are not linked: they do not say which paper.
+// Rendered answers are cached (HTML plus the citation of each link, in document order), so opening
+// a chat again skips Markdown and KaTeX. The key includes the project's paper labels, which appear
+// in citation chips. Least recently used entries go first beyond BODY_CACHE_CHARS characters.
+const BODY_CACHE_CHARS = 16e6, REF_LINKS = '.cite,.ref-link,.eq-link,.quote-link';
+const bodyCache = new Map(); let bodyCacheChars = 0;
+const labelsKeys = new WeakMap();
+const labelsKey = () => { const ps = project?.papers; if (!ps) return ''; let k = labelsKeys.get(ps); if (k === undefined) labelsKeys.set(ps, k = JSON.stringify([...paperLabels(ps)])); return k; };
+function linkBody(body) {
+  body.addEventListener('click', e => { const el = e.target.closest('.cite,.ref-link,.eq-link,.quote-link'); if (el?.ref) { e.stopPropagation(); navigate(el.ref); } });
+  body.addEventListener('keydown', e => { if ((e.key === 'Enter' || e.key === ' ') && e.target.classList.contains('eq-link')) { e.preventDefault(); navigate(e.target.ref); } });
+  return body;
+}
 function renderBody(text, linkRefs, whole = false) {
+  const cacheKey = `${linkRefs ? 1 : 0}${whole ? 1 : 0}${labelsKey()}\u0000${text}`, hit = bodyCache.get(cacheKey);
+  if (hit) {
+    bodyCache.delete(cacheKey); bodyCache.set(cacheKey, hit);
+    const body = h('div', {className: 'message-body', innerHTML: hit.html});
+    if (!linkRefs) return body;
+    body.querySelectorAll(REF_LINKS).forEach((el, i) => { el.ref = hit.refs[i]; });
+    return linkBody(body);
+  }
+  const body = renderBodyFresh(text, linkRefs, whole);
+  const html = body.innerHTML;
+  if (html.length < BODY_CACHE_CHARS / 8) {
+    bodyCache.set(cacheKey, {html, refs: linkRefs ? [...body.querySelectorAll(REF_LINKS)].map(el => el.ref) : null}); bodyCacheChars += html.length;
+    for (const [k, v] of bodyCache) { if (bodyCacheChars <= BODY_CACHE_CHARS) break; bodyCache.delete(k); bodyCacheChars -= v.html.length; }
+  }
+  return body;
+}
+function renderBodyFresh(text, linkRefs, whole) {
   const body = h('div', {className: 'message-body'});
   const math = [], cites = [], quotes = [];
   const anchors = [];
@@ -617,14 +749,19 @@ function renderBody(text, linkRefs, whole = false) {
     }
     frag.append(node.textContent.slice(at)); node.replaceWith(frag);
   }
-  body.addEventListener('click', e => { const el = e.target.closest('.cite,.ref-link,.eq-link,.quote-link'); if (el?.ref) { e.stopPropagation(); navigate(el.ref); } });
-  body.addEventListener('keydown', e => { if ((e.key === 'Enter' || e.key === ' ') && e.target.classList.contains('eq-link')) { e.preventDefault(); navigate(e.target.ref); } });
-  return body;
+  return linkBody(body);
 }
 
 function addMessage(role, text, meta = {}, scroll = true) {
   $('#messages .chat-empty')?.remove();
-  const article = h('article', {className: 'message ' + role + (scroll ? '' : ' instant')});
+  const article = buildMessage(role, text, meta, scroll);
+  $('#messages').append(article);
+  if (scroll) article.scrollIntoView({behavior: 'smooth', block: 'end'});
+  return article;
+}
+// One message as an <article> (not yet in the page); `animate` false shows it without the rise-in.
+function buildMessage(role, text, meta = {}, animate = true) {
+  const article = h('article', {className: 'message ' + role + (animate ? '' : ' instant')});
   const when = meta.at ? ' · ' + new Date(meta.at).toLocaleString([], {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'}) : '';
   const extra = role === 'user' ? (meta.web ? ' · WEB SEARCH' : '') : meta.retrieval ? ` · ${meta.retrieval.passages} passages${meta.retrieval.mode === 'keywords' ? ' (keyword search)' : ''}` : '';
   article.append(h('small', {textContent: (role === 'user' ? 'YOU' : 'MARGIN' + (meta.model ? ' · ' + meta.model : '')) + extra + when}));
@@ -651,8 +788,6 @@ function addMessage(role, text, meta = {}, scroll = true) {
       h('ol', {}, ...meta.sources.map(src => { let host = ''; try { host = new URL(src.url).hostname.replace(/^www\./, ''); } catch {}
         return h('li', {}, h('a', {href: src.url, target: '_blank', rel: 'noopener noreferrer', textContent: src.title || host || src.url}), host && src.title ? h('small', {textContent: ' · ' + host}) : ''); }))));
   }
-  $('#messages').append(article);
-  if (scroll) article.scrollIntoView({behavior: 'smooth', block: 'end'});
   return article;
 }
 let scrollTimer;
@@ -685,6 +820,7 @@ $('#ask').onsubmit = async e => {
   if (whole && !project.papers.length) { notice('Add papers to this project first.'); return; }
   if (!session?.configured) { notice('Add your OpenAI API key in Settings first.'); $('#open-settings').click(); return; }
   working = true; controls(); showStatus();
+  try { await loadMarkdown(); } catch (e) { notice('Could not load the chat view: ' + e.message); working = false; controls(); showStatus(); return; }
   const target = chat, projectId = project.id;
   const web = webSearch;
   const pending = addMessage('user', question, {at: new Date().toISOString(), image, web}); $('#question').value = ''; setContext(null);
@@ -1029,13 +1165,16 @@ window.addEventListener('drop', async e => {
 });
 
 // ---------- citation map ----------
-let map = null, mapProject = null, mapStale = false;
+let map = null, mapProject = null, mapStale = false, mapModule = null;
 async function openMap(refresh = false) {
   if (!project) return;
   document.body.classList.add('map-mode'); $('#map-view').hidden = false; hideRefCard(); hidePop();
   $('#map-project').textContent = project.name; $('#map-card').hidden = true;
   if (map && mapProject === project.id && !refresh && !mapStale) { map.fit(0); return; }
   mapStale = false;
+  let createMap; // the map code (d3) loads when the map is first opened
+  try { ({createMap} = await (mapModule ??= import('./map.js'))); } catch (e) { mapModule = null; $('#map-status').textContent = 'Could not load the map: ' + e.message; return; }
+  if (!project) return;
   map?.destroy(); map = createMap($('#map-svg'), {onSelect: n => showMapCard(n)}); mapProject = project.id;
   const n = project.papers.length;
   $('#map-status').textContent = n ? `Building the map: fetching references and citing papers for ${n} paper${n === 1 ? '' : 's'}…` : 'Add papers to this project to see how they cite each other.';
@@ -1152,5 +1291,6 @@ showStatus();
 if (session) {
   if (!session.configured) notice('Welcome! Open Settings to add your OpenAI API key.');
   await Promise.all([loadModels(), refreshProjects().then(() => renderLibrary()).catch(e => notice(e.message))]);
+  idle(() => loadMarkdown().catch(() => {}), 3000); // so the first chat opens without waiting for the Markdown/maths code
   if (project?.papers.length && !paper) notice(session.configured ? `Project "${project.name}": pick a paper in the sidebar, or add a PDF.` : 'Open Settings to add your OpenAI API key.');
 }

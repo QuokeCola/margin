@@ -1,6 +1,5 @@
 import dotenv from 'dotenv';
 import express from 'express';
-import OpenAI from 'openai';
 import {randomBytes, timingSafeEqual, createHash} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {dirname, join, isAbsolute} from 'node:path';
@@ -9,7 +8,7 @@ import {mkdir, readFile, writeFile, rename, readdir, rm, stat} from 'node:fs/pro
 import {KEY_PATTERN, MODEL_PATTERN, PAPER_ID, CHAT_ID, updateEnvText, isTextModel, keyHint, cleanName, chatTitle} from './lib/config.mjs';
 import {createStore, PROJECT_ID} from './lib/store.mjs';
 import {lookupPaper, cleanDoi, worksById, searchWorks, workById, citingWorks, workSummary} from './lib/metadata.mjs';
-import {createIndexer} from './lib/project-index.mjs';
+import {createIndexer, limiter} from './lib/project-index.mjs';
 import {projectContext, searchQuery} from './lib/retrieval.mjs';
 import {paperLabels} from './lib/labels.mjs';
 
@@ -121,9 +120,12 @@ async function projectOr404(req, res) {
 }
 
 // ---------- settings ----------
+// The OpenAI SDK is loaded on first use (it is large and most requests never need it).
+let OpenAIClass = null;
+const loadOpenAI = async () => OpenAIClass ??= (await import('openai')).default;
 let modelCache = null;
 async function listModels(apiKey) {
-  const client = new OpenAI({apiKey, timeout: 15000, maxRetries: 0});
+  const client = new (await loadOpenAI())({apiKey, timeout: 15000, maxRetries: 0});
   const all = [];
   for await (const m of client.models.list()) all.push(m);
   return all.filter(m => isTextModel(m.id)).sort((a, b) => b.created - a.created || a.id.localeCompare(b.id)).map(m => m.id);
@@ -187,7 +189,9 @@ app.patch('/api/projects/:pid', async (req, res) => {
 app.delete('/api/projects/:pid', async (req, res) => {
   if (!ids(req, res)) return;
   if ((await store.listProjects()).length <= 1) return res.status(400).json({error: 'Keep at least one project.'});
+  const gone = (await store.loadProject(req.params.pid))?.papers || [];
   await store.deleteProject(req.params.pid);
+  indexer.forget(gone);
   res.sendStatus(204);
 });
 
@@ -206,13 +210,18 @@ app.post('/api/projects/:pid/papers', express.raw({type: 'application/pdf', limi
 app.delete('/api/projects/:pid/papers/:id', async (req, res) => {
   if (!(await projectOr404(req, res))) return;
   await store.removeFromProject(req.params.pid, req.params.id);
+  indexer.forget([req.params.id]);
   res.sendStatus(204);
 });
+const OPENED_AT_GRANULARITY = 10 * 60e3;
 app.get('/api/papers/:id', async (req, res) => {
   if (!ids(req, res)) return;
   const p = await store.loadPaper(req.params.id);
   if (!p) return res.status(404).json({error: 'Paper not found.'});
-  p.openedAt = now(); await store.savePaper(p);
+  // openedAt is saved at most every OPENED_AT_GRANULARITY, not on every open (nothing else changes here).
+  const stored = Date.parse(p.openedAt), at = now();
+  p.openedAt = at;
+  if (!(Date.now() - stored < OPENED_AT_GRANULARITY)) await store.savePaper(p);
   res.json(p);
 });
 app.get('/api/papers/:id/pdf', async (req, res) => {
@@ -336,7 +345,7 @@ app.post('/api/works/search', async (req, res) => {
 });
 
 // ---------- citation map ----------
-const WEEK = 7 * 864e5;
+const WEEK = 7 * 864e5, GRAPH_CONCURRENCY = 4;
 const freshFor = (c, key) => c && c.key === key && Date.now() - new Date(c.at) < WEEK;
 // A paper's references and its most-cited citing works, cached with the paper for a week.
 async function neighbours(p, force = false) {
@@ -361,12 +370,17 @@ app.get('/api/projects/:pid/graph', async (req, res) => {
     return key;
   };
   const edge = (from, to) => { if (from !== to) edges.set(`${from}>${to}`, {source: from, target: to}); };
-  for (const p of papers) {
+  // OpenAlex is asked about GRAPH_CONCURRENCY papers at a time; the map is then built in project order.
+  const slot = limiter(GRAPH_CONCURRENCY), refresh = !!req.query.refresh;
+  const near = papers.map(p => p.meta?.openalexId ? slot(() => neighbours(p, refresh)).then(x => ({x}), e => ({e})) : null);
+  for (const [i, p] of papers.entries()) {
     const m = p.meta;
     if (!m?.openalexId) { nodes.set('local:' + p.id, {id: 'local:' + p.id, roles: new Set(['library']), title: p.name, authors: [], year: null, paperId: p.id, noRecord: true}); continue; }
     const me = node({...workSummary({id: 'https://openalex.org/' + m.openalexId, doi: m.doi ? 'https://doi.org/' + m.doi : null, title: m.title, authorships: (m.authors || []).map(a => ({author: {display_name: a}})), publication_year: m.year, primary_location: {source: {display_name: m.venue}}, cited_by_count: m.citedBy}), abstract: m.abstract?.slice(0, 1200) || null, paperId: p.id}, 'library');
+    const got = await near[i];
     try {
-      const {refs, citing} = await neighbours(p, !!req.query.refresh);
+      if (got.e) throw got.e;
+      const {refs, citing} = got.x;
       for (const r of refs) edge(me, node(r, 'reference'));
       for (const c of citing) edge(node(c, 'citing'), me);
     } catch { failed.push(p.name); }
@@ -421,7 +435,7 @@ app.post('/api/projects/:pid/chats', async (req, res) => {
   const project = await projectOr404(req, res); if (!project) return;
   if (req.body?.scope === 'project') {
     // Index the papers in the background so the first question does not wait for all of it.
-    if (process.env.OPENAI_API_KEY) indexer.warm(project.papers, openai(60000));
+    if (process.env.OPENAI_API_KEY) openai(60000).then(client => indexer.warm(project.papers, client), () => {});
     return res.json(await store.newChat(project.id, null, 'project'));
   }
   const paperId = req.body?.paperId;
@@ -481,13 +495,13 @@ function urlSources(response) {
       if (a.type === 'url_citation' && /^https?:\/\//i.test(a.url || '') && !out.has(a.url)) out.set(a.url, {url: String(a.url).slice(0, 2000), title: String(a.title || '').slice(0, 300)});
   return [...out.values()].slice(0, 30);
 }
-const openai = (timeout = 120000) => new OpenAI({apiKey: process.env.OPENAI_API_KEY, timeout, maxRetries: 1});
+const openai = async (timeout = 120000) => new (await loadOpenAI())({apiKey: process.env.OPENAI_API_KEY, timeout, maxRetries: 1});
 
 // Context for a project chat: every paper's details and the passages retrieved for this question.
 async function projectMaterial(project, question, history) {
   const papers = (await Promise.all(project.papers.map(store.loadPaper))).filter(Boolean);
   if (!papers.length) return {text: 'PROJECT PAPERS\n\n(This project has no papers yet.)', retrieval: {mode: 'none', passages: 0}};
-  const r = await indexer.retrieve(papers.map(p => p.id), searchQuery(question, history), openai(60000));
+  const r = await indexer.retrieve(papers.map(p => p.id), searchQuery(question, history), await openai(60000));
   const labels = paperLabels(papers);
   const list = await Promise.all(papers.map(async p => {
     const m = p.meta || {}, authors = m.authors || [];
@@ -498,7 +512,9 @@ async function projectMaterial(project, question, history) {
   return {text: projectContext(list, r.passages), retrieval: {mode: r.mode, passages: r.passages.length}};
 }
 
-let busy = false;
+let busy = false, busyFree = Promise.resolve(), freeBusy = () => {};
+const takeBusy = () => { busy = true; busyFree = new Promise(r => { freeBusy = r; }); };
+const dropBusy = () => { busy = false; freeBusy(); };
 app.post('/api/projects/:pid/chats/:cid/messages', async (req, res) => {
   const c = await chatOr404(req, res); if (!c) return;
   if (!process.env.OPENAI_API_KEY) return res.status(503).json({error: 'Add your OpenAI API key in Settings.'});
@@ -513,15 +529,19 @@ app.post('/api/projects/:pid/chats/:cid/messages', async (req, res) => {
     return res.status(400).json({error: 'Document or question exceeds the supported limits (300 pages, 600,000 characters).'});
   const history = c.messages.slice(-28).map(m => ({role: m.role, content: m.content}));
   const used = model();
-  busy = true;
+  let source, retrieval = null, mine = false;
   try {
-    let source, retrieval = null;
+    // A project chat first retrieves passages, which may need to index papers; that runs without holding
+    // the answer lock, so other chats are not refused meanwhile. The lock is taken before the model is asked,
+    // waiting for an answer that started in the meantime.
     if (projectChat) {
       const project = await store.loadProject(req.params.pid);
       const material = await projectMaterial(project || {papers: []}, question, history);
       source = material.text; retrieval = material.retrieval;
+      while (busy) await busyFree;
     } else source = 'SOURCE DOCUMENT\n' + pages.map(p => `[PDF PAGE ${p.page}]\n${p.text}`).join('\n\n');
-    const client = openai();
+    takeBusy(); mine = true;
+    const client = await openai();
     const response = await client.responses.create({model: used, store: false, max_output_tokens: web ? 8000 : 5000,
       instructions: (projectChat ? PROJECT_INSTRUCTIONS : INSTRUCTIONS) + (web ? WEB_NOTE : ''),
       ...(web ? {tools: [{type: 'web_search'}]} : {}),
@@ -540,7 +560,7 @@ app.post('/api/projects/:pid/chats/:cid/messages', async (req, res) => {
     const status = e.status;
     if (!status) console.error('Answer failed:', e.message);
     res.status(502).json({error: status === 401 ? 'The API key was rejected. Update it in Settings.' : status === 429 ? 'OpenAI quota or rate limit reached. Check your API account and try again.' : status === 404 ? `The model "${used}" is unavailable. Pick another in the model menu.` : status === 400 && web ? `The model request failed. "${used}" may not support web search; turn Web off or pick another model.` : 'The model request failed or timed out. Check your connection, model access, and document size; try again.'});
-  } finally { busy = false; }
+  } finally { if (mine) dropBusy(); }
 });
 
 if (process.argv.includes('--production') || process.env.MARGIN_PRODUCTION) app.use(express.static(join(root, 'dist')));
@@ -551,4 +571,7 @@ app.use((err, req, res, next) => {
   if (status >= 500) console.error(err);
 });
 await store.init();
-app.listen(port, '127.0.0.1', () => console.log(`Margin: http://127.0.0.1:${port}  (data: ${DATA_DIR})`));
+app.listen(port, '127.0.0.1', () => {
+  console.log(`Margin: http://127.0.0.1:${port}  (data: ${DATA_DIR})`);
+  process.parentPort?.postMessage({ready: true, port}); // running as the desktop app's utility process
+});

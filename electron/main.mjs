@@ -1,11 +1,12 @@
-// Desktop shell: runs Margin's local server inside the app and shows it in a window.
-import {app, BrowserWindow, shell, ipcMain, session} from 'electron';
+// Desktop shell: runs Margin's local server in a utility process (so heavy server work never stalls the
+// window) and shows it in a window.
+import {app, BrowserWindow, shell, ipcMain, session, utilityProcess, dialog, nativeTheme} from 'electron';
 import {readFile, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {randomBytes} from 'node:crypto';
 import {createServer} from 'node:net';
 import {dirname, join} from 'node:path';
-import {fileURLToPath, pathToFileURL} from 'node:url';
+import {fileURLToPath} from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PREFERRED_PORT = 47317; // fixed when free, so window settings (zoom, sidebar) persist between launches
@@ -17,11 +18,29 @@ async function freePort() {
   if (await tryPort(PREFERRED_PORT)) return PREFERRED_PORT;
   return new Promise(resolve => { const s = createServer().listen(0, '127.0.0.1', () => { const {port} = s.address(); s.close(() => resolve(port)); }); });
 }
-async function waitFor(url, ms = 15000) {
-  const end = Date.now() + ms;
-  while (Date.now() < end) { try { if ((await fetch(url)).ok) return; } catch {} await new Promise(r => setTimeout(r, 100)); }
-  throw new Error('Margin server did not start');
+// Starts server.mjs in a utility process; resolves once it listens (it posts {ready}).
+let server = null, quitting = false;
+function startServer(env, ms = 15000) {
+  return new Promise((resolve, reject) => {
+    const child = utilityProcess.fork(join(root, 'server.mjs'), ['--production'], {env, stdio: 'inherit', serviceName: 'Margin server'});
+    server = child;
+    let ready = false;
+    const timer = setTimeout(() => { if (!ready) { child.kill(); reject(new Error('Margin server did not start')); } }, ms);
+    child.on('message', m => { if (m?.ready && !ready) { ready = true; clearTimeout(timer); resolve(); } });
+    child.once('exit', code => {
+      server = null; clearTimeout(timer);
+      if (!ready) return reject(new Error(`Margin server exited during startup (code ${code})`));
+      if (quitting) return;
+      // The window cannot work without its server: say so and close, as a crash of the old in-process server would.
+      // (Asynchronous, so it can never hold up an exit that is already under way.)
+      console.error(`Margin server stopped (code ${code})`);
+      const opts = {type: 'error', title: 'Margin', message: `Margin's local server stopped unexpectedly (code ${code}). Margin will close; your library is saved on disk.`};
+      (win && !win.isDestroyed() ? dialog.showMessageBox(win, opts) : dialog.showMessageBox(opts)).finally(() => app.quit());
+    });
+  });
 }
+app.on('before-quit', () => { quitting = true; });
+app.on('will-quit', () => { server?.kill(); });
 
 if (!app.requestSingleInstanceLock()) app.quit();
 let win = null;
@@ -30,18 +49,17 @@ app.on('window-all-closed', () => app.quit());
 
 app.whenReady().then(async () => {
   const port = await freePort();
-  process.env.PORT = String(port);
-  process.env.MARGIN_PRODUCTION = '1';
+  const env = {...process.env, PORT: String(port), MARGIN_PRODUCTION: '1'};
   // Key and model live in the app's config folder (~/.config/Margin, %APPDATA%\Margin, ~/Library/Application Support/Margin).
-  process.env.MARGIN_ENV_FILE ??= join(app.getPath('userData'), 'settings.env');
+  env.MARGIN_ENV_FILE ??= join(app.getPath('userData'), 'settings.env');
   // On Linux keep the shared XDG library (~/.local/share/margin); elsewhere use the app folder.
-  if (process.platform !== 'linux') process.env.MARGIN_DATA_DIR ??= join(app.getPath('userData'), 'library');
-  await import(pathToFileURL(join(root, 'server.mjs')).href);
+  if (process.platform !== 'linux') env.MARGIN_DATA_DIR ??= join(app.getPath('userData'), 'library');
+  const started = startServer(env);
   const origin = `http://127.0.0.1:${port}`;
-  await waitFor(origin + '/api/status');
 
+  // The (hidden) window is created while the server starts; it loads the page once the server listens.
   win = new BrowserWindow({
-    width: 1440, height: 900, minWidth: 960, minHeight: 600, title: 'Margin', backgroundColor: '#f8f8f3',
+    width: 1440, height: 900, minWidth: 960, minHeight: 600, title: 'Margin', backgroundColor: nativeTheme.shouldUseDarkColors ? '#1c221f' : '#f8f8f3',
     icon: join(root, 'assets', 'margin-512.png'), autoHideMenuBar: true, show: false,
     webPreferences: {contextIsolation: true, sandbox: true, nodeIntegration: false, spellcheck: true, preload: join(root, 'electron', 'preload.cjs')}
   });
@@ -49,6 +67,7 @@ app.whenReady().then(async () => {
   // Links in answers open in the system browser; the window never leaves the local app.
   win.webContents.setWindowOpenHandler(({url}) => { if (/^https?:\/\//.test(url)) shell.openExternal(url); return {action: 'deny'}; });
   win.webContents.on('will-navigate', (e, url) => { if (!url.startsWith(origin)) { e.preventDefault(); if (/^https?:\/\//.test(url)) shell.openExternal(url); } });
+  await started;
   await win.loadURL(origin + '/');
 }).catch(err => { console.error(err); app.exit(1); });
 

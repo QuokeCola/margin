@@ -9,6 +9,10 @@ const NS = 'http://www.w3.org/2000/svg';
 const radius = n => n.kind === 'library' ? 9 + Math.min(7, Math.log10((n.citedBy ?? 0) + 1) * 2) : 3.5 + Math.min(7, Math.log10((n.citedBy ?? 0) + 1) * 1.6);
 // Project papers, shared papers and expanded ones carry a label, so they need extra room.
 const labelled = n => n.kind === 'library' || n.degree >= 2 || n.expanded;
+// A new graph is laid out ahead of its first paint (up to WARM_TICKS steps, WARM_MS, or until it has
+// cooled to WARM_ALPHA), then animates the rest of the way. The steps are the ones the animation
+// would have run, so the final layout is unchanged.
+const WARM_TICKS = 150, WARM_MS = 150, WARM_ALPHA = 0.05;
 const short = n => `${(n.authors?.[0] || n.title || '?').split(' ').pop()}${n.year ? ' ' + n.year : ''}`;
 
 export function createMap(svgEl, {onSelect, onHover} = {}) {
@@ -24,7 +28,7 @@ export function createMap(svgEl, {onSelect, onHover} = {}) {
   svg.call(zoomer).on('dblclick.zoom', null);
 
   let all = {nodes: new Map(), edges: new Map()}, filters = {refs: true, citing: true, shared: false, byYear: false};
-  let sim = null, selected = null, visible = {nodes: [], edges: []};
+  let sim = null, selected = null, visible = {nodes: [], edges: []}, warm = false;
 
   // Links to the project's papers decide what "shared" means and which external papers matter most.
   function libraryDegree() {
@@ -112,6 +116,18 @@ export function createMap(svgEl, {onSelect, onHover} = {}) {
       });
       nodeSel.attr('transform', n => `translate(${n.x},${n.y})`);
     });
+    if (warm) {
+      // In a microtask: setData is usually followed at once by setFilters, which replaces this simulation.
+      const s = sim.stop();
+      queueMicrotask(() => {
+        if (sim !== s) return;
+        warm = false;
+        const t0 = performance.now();
+        for (let i = 0; i < WARM_TICKS && s.alpha() > WARM_ALPHA && performance.now() - t0 < WARM_MS; i++) s.tick();
+        s.on('tick').call(s);
+        s.restart();
+      });
+    }
   }
 
   function hover(n) {
@@ -141,6 +157,7 @@ export function createMap(svgEl, {onSelect, onHover} = {}) {
     setData({nodes, edges}) {
       const old = all.nodes;
       all = {nodes: new Map(nodes.map(n => [n.id, Object.assign(old.get(n.id) || {}, n)])), edges: new Map(edges.map(e => [`${e.source}>${e.target}`, e]))};
+      warm = true;
       draw(1);
       setTimeout(() => fit(), 900);
     },
