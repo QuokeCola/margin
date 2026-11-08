@@ -4,7 +4,7 @@
 
 Margin puts a chat on the left and the PDF on the right. Ask about a passage, an equation or a figure, and the answer points back into the paper: click a citation and Margin frames the equation or highlights the quoted words, so you can check every claim against the source. Keep papers in projects, see how they cite each other, and ask questions across a whole project. Margin runs on your computer with your own OpenAI or Claude API key.
 
-![Margin: an answer from Claude beside the PDF, with the cited equation framed on the page](docs/images/answer-equation.png)
+![Margin: a question about the paper is answered; clicking the equation citation frames Eq. (4) on the page, clicking a quote highlights the quoted words](docs/images/hero.gif)
 
 ## Download and install
 
@@ -39,13 +39,13 @@ Margin checks the key with the provider and keeps it only on your computer. You 
 
 Select text, draw a box with **✎ Mark** around a figure or any part of a page, or click a numbered equation, then press **Ask AI ↗**. What you picked is attached to your question together with an image of it, so symbols that the PDF's text loses still reach the AI.
 
-![Three ways to ask: select text, mark an area around a figure, click an equation](docs/images/ask.png)
+![Three ways to ask: select a sentence, mark a box around a figure with ✎ Mark, click an equation and attach it to the question](docs/images/ask.gif)
 
 ### Answers you can check
 
 Answers cite pages, equations and the exact words they rely on. Click a citation: equations get a frame on the page, quotes are highlighted word for word. With **Follow chat** on, the PDF moves to the citations of the answer you are reading.
 
-![A quoted sentence from the answer highlighted in the PDF](docs/images/answer-quote.png)
+![Clicking citations in an answer: an equation is framed on its page, then a quote is highlighted word for word](docs/images/answers.gif)
 
 ### Projects
 
@@ -55,19 +55,19 @@ Keep papers and chats in projects; a paper can be in several projects and is sto
 
 Numbered citations in the PDF, such as “[19]”, are clickable: a card shows the cited paper with its abstract and **Add to project**.
 
-<img src="docs/images/reference-card.png" width="620" alt="Reference card opened from a [19] marker in the PDF, with the cited paper's details and Add to project">
+![Clicking a [25] marker in the PDF opens a card with the cited paper's details, abstract and Add to project](docs/images/reference-card.gif)
 
 ### Citation map
 
 **◎ Citation map** shows how a project's papers connect: your papers, the works they cite and the works citing them. Papers linked to more than one of yours are marked as shared. Filter to shared papers only, arrange everything by year, and click any paper for its details, **Add to project** or **Expand** (pull in its own references and citers).
 
-![Citation map of a project, with a shared paper's card open](docs/images/citation-map.png)
+![Opening the citation map, clicking a shared paper for its card, then showing only shared papers arranged by year](docs/images/citation-map.gif)
 
 ### Chat with a whole project
 
 Start a **New chat → Whole project** to ask across all papers in a project. Citations name the paper they come from, and clicking one opens that paper at the quoted words. Turn on **⌕ Web** to let an answer also search the web; the pages it used are listed under the answer.
 
-![A whole-project answer with citations from several papers](docs/images/project-chat.png)
+![A new Whole project chat: the answer cites both papers, and clicking a citation opens the other paper at the quoted words](docs/images/project-chat.gif)
 
 <img src="docs/images/project-chat-web.png" width="420" alt="An answer with web search, ending with its list of web sources">
 
@@ -94,7 +94,7 @@ Switch between **OpenAI** and **Claude** in Settings; each keeps its own key and
 
 Choose **System**, **Light** or **Dark** under **Settings → Theme**.
 
-![Dark mode: a chat with a citation beside the PDF, with the cited words highlighted](docs/images/dark.png)
+![Switching Settings → Theme to Dark](docs/images/dark-mode.gif)
 
 ## Privacy
 
