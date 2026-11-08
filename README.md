@@ -2,7 +2,7 @@
 
 **Read a research paper beside an AI tutor whose citations jump to the exact page and equation.**
 
-Margin puts a chat on the left and the PDF on the right. Answers cite pages, equations and quoted sentences, and every citation is clickable: equations get a tight frame in the PDF, quotes are highlighted word for word. Select text, mark an area or click an equation to ask about it. Papers are grouped into projects with their references, a citation map and chats that can cover the whole project. It runs on your computer with your own OpenAI API key.
+Margin puts a chat on the left and the PDF on the right. Answers cite pages, equations and quoted sentences, and every citation is clickable: equations get a tight frame in the PDF, quotes are highlighted word for word. Select text, mark an area or click an equation to ask about it. Papers are grouped into projects with their references, a citation map and chats that can cover the whole project. It runs on your computer with your own OpenAI or Anthropic (Claude) API key.
 
 ![Margin demo: asking a question, following equation and quote citations, zooming, and asking about an equation](docs/images/demo.gif)
 
@@ -17,11 +17,24 @@ Get the latest build from **[Releases](https://github.com/QuokeCola/margin/relea
 | Windows | `Margin-<version>-win-x64.exe` | Installer. The app is not code-signed, so SmartScreen may warn: **More info → Run anyway**. |
 | macOS (Apple silicon / Intel) | `Margin-<version>-mac-arm64.dmg` / `-mac-x64.dmg` | Not notarized. First launch: right-click the app → **Open**, or **System Settings → Privacy & Security → Open Anyway**. |
 
-### Set up your OpenAI key
+### Set up your API key
+
+Margin works with **OpenAI** or **Claude** (Anthropic); pick one under **Settings → AI provider**. You can save both keys and switch any time.
+
+**OpenAI**
+
 
 1. Create a key at **[platform.openai.com/api-keys](https://platform.openai.com/api-keys)** (**Create new secret key**). Add credit under [Billing](https://platform.openai.com/settings/organization/billing/overview) if your account has none; answers are billed per use.
 2. In Margin, click **Settings**, paste the key and click **Save**. It is checked with OpenAI and stored only on your computer (desktop app: `~/.config/Margin`, `%APPDATA%\Margin` or `~/Library/Application Support/Margin`).
 3. Pick a model from the **Model** menu in the header.
+
+**Claude**
+
+1. Sign in at **[platform.claude.com](https://platform.claude.com/settings/keys)** (the Claude Console), open **Settings → API keys** and click **Create Key**. Add credits under [Billing](https://platform.claude.com/settings/billing) if needed; answers are billed per use.
+2. In Margin, open **Settings**, choose **Claude**, paste the key into **Anthropic API key** and click **Save**. It is checked with Anthropic and stored only on your computer.
+3. Pick a Claude model from the **Model** menu (default `claude-opus-5-5`).
+
+Whole-project chats find passages with OpenAI embeddings. With only a Claude key they use keyword search instead; add an OpenAI key as well for semantic search (embeddings are billed to OpenAI).
 
 ## What it does
 
@@ -69,7 +82,7 @@ Get the latest build from **[Releases](https://github.com/QuokeCola/margin/relea
 - Citations name the paper (chips show “Kingma 2015 · p. 2”); clicking one opens that paper and highlights the words.
 - For full detail on one paper, start a **This paper** chat; it sends that whole paper.
 
-**⌕ Web** in the composer lets an answer use OpenAI web search; the pages used are listed under the answer. It is off at every launch, works in both chat types, and is billed per search by OpenAI.
+**⌕ Web** in the composer lets an answer use the selected provider's web search; the pages used are listed under the answer. It is off at every launch, works in both chat types, and is billed per search by OpenAI.
 
 ![Whole-project answer with citation chips from three different papers; the selected chip opened its paper with the quoted words highlighted](docs/images/project-chat.png)
 
@@ -108,7 +121,7 @@ The extension in the `extension/` folder lets **Add to project** use your everyd
 
 ### Settings
 
-- **OpenAI API key** (see [Set up your OpenAI key](#set-up-your-openai-key)), with links to Usage and Billing.
+- **AI provider** (OpenAI or Claude) and its **API key** (see [Set up your API key](#set-up-your-api-key)), with links to the provider's key, Usage and Billing pages.
 - **Model**: pick from the list or type a model ID. The header menu changes it too.
 - **Library proxy prefix** (optional), e.g. `https://proxy.lib.example.edu/login?url=` (EZproxy style). Used when opening publisher pages.
 - **Browser extension**: folder and pairing code.
@@ -152,10 +165,10 @@ Page numbers always mean 1-based PDF positions, not printed journal page numbers
 
 ## Privacy and security
 
-**What is sent to OpenAI** (through the local server, with `store: false`; this is not a claim of zero retention by the API provider):
+**What is sent to the AI provider you selected** (OpenAI or Anthropic, through the local server; for OpenAI with `store: false`; this is not a claim of zero retention by either provider):
 
 - **This paper chats:** the extracted text of the entire paper, up to 28 recent chat messages, your question and any attached image. Full-paper context avoids missing distant references but costs more than retrieval and can exceed a smaller model's context window.
-- **Whole project chats:** each paper's title, authors, venue, year and abstract (or the start of its first page), the most relevant passages for the question (up to 16, at most 8 per paper), recent messages and your question. To build the search index, each paper's text is sent once to OpenAI's embeddings API (`text-embedding-3-small`); the index is cached next to the PDF. If embeddings fail, Margin ranks passages by keywords instead.
+- **Whole project chats:** each paper's title, authors, venue, year and abstract (or the start of its first page), the most relevant passages for the question (up to 16, at most 8 per paper), recent messages and your question. To build the search index, each paper's text is sent once to OpenAI's embeddings API (only when an OpenAI key is saved, also when Claude answers) (`text-embedding-3-small`); the index is cached next to the PDF. If embeddings fail, Margin ranks passages by keywords instead.
 - **Web** (when on): the model may run web searches; the pages it used are listed under the answer.
 
 API usage is billed to your account per request (and per web search).
@@ -189,7 +202,7 @@ npm run build
 
 - `electron/main.mjs`: desktop shell; starts the server in an Electron utility process (port 47317 when free), the publisher sign-in window, and copies the extension to the app's settings folder.
 - `electron/preload.cjs`: the one desktop bridge the page may use (sign-in window, opening links in your browser).
-- `server.mjs`: loopback server, settings (`.env`), model list, library and chat API, extension endpoints, OpenAI Responses request (with optional web search).
+- `server.mjs`: loopback server, settings (`.env`), model list, library and chat API, extension endpoints, provider settings and model lists; `lib/llm.mjs`: OpenAI Responses and Anthropic Messages requests (with optional web search).
 - `lib/store.mjs`: projects, shared paper store, chats (with a per-project `chats-index.json` summary cache), and the 1.x migration.
 - `lib/project-index.mjs`, `lib/pdf-text.mjs`, `lib/extract-worker.mjs`: project-chat search index (embeddings cached per paper); PDF text is extracted by pdf.js in worker threads.
 - `lib/retrieval.mjs`: passage splitting, embedding and keyword (BM25) ranking, and the project-chat context.
