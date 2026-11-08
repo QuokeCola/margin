@@ -53,7 +53,8 @@
       "lib/**",
       "electron/**",
       "assets/margin-512.png",
-      "package.json"
+      "package.json",
+      "extension/**"
     ],
     "publish": null,
     "linux": {
@@ -103,7 +104,10 @@
       "category": "public.app-category.education",
       "identity": null
     },
-    "afterPack": "build/adhoc-sign.cjs"
+    "afterPack": "build/adhoc-sign.cjs",
+    "asarUnpack": [
+      "extension/**"
+    ]
   },
   "desktopName": "margin.desktop"
 }

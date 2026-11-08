@@ -22,8 +22,51 @@ const model = () => process.env.OPENAI_MODEL || DEFAULT_MODEL;
 app.use((req, res, next) => {
   if (![`127.0.0.1:${port}`, `localhost:${port}`].includes(req.headers.host)) return res.sendStatus(403);
   res.setHeader('X-Content-Type-Options', 'nosniff'); res.setHeader('Referrer-Policy', 'no-referrer');
-  if (req.headers.origin && ![`http://127.0.0.1:${port}`, `http://localhost:${port}`].includes(req.headers.origin)) return res.sendStatus(403);
+  const origin = req.headers.origin;
+  // The browser extension may call only its own endpoints (which require the pairing code).
+  const extOk = origin && /^(chrome|moz)-extension:\/\/[a-z0-9-]+$/i.test(origin) && req.path.startsWith('/api/ext/');
+  if (origin && !extOk && ![`http://127.0.0.1:${port}`, `http://localhost:${port}`].includes(origin)) return res.sendStatus(403);
   next();
+});
+
+// ---------- browser extension ("Margin connector") ----------
+// Margin asks for a paper (a fetch request); the extension, running in the user's own browser with
+// their logins, finds the PDF on the publisher page and posts it back. Requests live in memory for 30 min.
+const fetchRequests = new Map(); // id -> {id, projectId, openalexId, doi, title, landing, created, status, paper, error, attempts}
+let extLastSeen = null, lastProjectId = null;
+const pruneRequests = () => { for (const [id, r] of fetchRequests) if (Date.now() - r.created > 30 * 60e3) fetchRequests.delete(id); };
+function extAuth(req, res, next) {
+  const want = process.env.MARGIN_EXT_TOKEN || '', got = Buffer.from(String(req.headers['x-margin-ext'] || ''));
+  if (!want || got.length !== want.length || !timingSafeEqual(got, Buffer.from(want))) return res.status(401).json({error: 'Not paired with Margin. Paste the pairing code from Margin → Settings.'});
+  extLastSeen = new Date().toISOString();
+  next();
+}
+const publicRequest = r => ({id: r.id, doi: r.doi, title: r.title, landing: r.landing, created: r.created});
+app.get('/api/ext/hello', extAuth, (_, res) => { pruneRequests(); res.json({app: 'margin', version: process.env.npm_package_version || null, pending: [...fetchRequests.values()].filter(r => r.status === 'pending').length}); });
+app.get('/api/ext/requests', extAuth, (_, res) => { pruneRequests(); res.json({requests: [...fetchRequests.values()].filter(r => r.status === 'pending').map(publicRequest)}); });
+app.post('/api/ext/requests/:rid/note', extAuth, express.json({limit: '64kb'}), (req, res) => {
+  const r = fetchRequests.get(req.params.rid); if (!r) return res.status(404).json({error: 'Unknown request.'});
+  r.attempts.push({at: new Date().toISOString(), ...Object.fromEntries(Object.entries(req.body || {}).map(([k, v]) => [k, String(v).slice(0, 300)]))});
+  if (r.attempts.length > 30) r.attempts.shift();
+  res.json({ok: true});
+});
+app.post('/api/ext/requests/:rid/pdf', extAuth, express.raw({type: 'application/pdf', limit: '61mb'}), async (req, res) => {
+  const r = fetchRequests.get(req.params.rid);
+  if (!r || r.status !== 'pending') return res.status(404).json({error: 'This request is no longer waiting for a PDF.'});
+  const buf = req.body;
+  if (!Buffer.isBuffer(buf) || buf.subarray(0, 5).toString() !== '%PDF-') return res.status(415).json({error: 'Not a PDF.'});
+  try { r.paper = await addPdfToProject(buf, r.projectId, {openalexId: r.openalexId, doi: r.doi, filename: r.doi || r.title}); r.status = 'done'; res.json({ok: true}); }
+  catch (e) { res.status(400).json({error: e.message}); }
+});
+// "Send this PDF to Margin" from any page: goes to the project used last.
+app.post('/api/ext/pdf', extAuth, express.raw({type: 'application/pdf', limit: '61mb'}), async (req, res) => {
+  const buf = req.body;
+  if (!Buffer.isBuffer(buf) || buf.subarray(0, 5).toString() !== '%PDF-') return res.status(415).json({error: 'Not a PDF.'});
+  const projectId = lastProjectId || (await store.listProjects())[0]?.id;
+  if (!projectId) return res.status(400).json({error: 'Open a project in Margin first.'});
+  let name; try { name = decodeURIComponent(String(req.headers['x-filename'] || '')); } catch { name = ''; }
+  try { const paper = await addPdfToProject(buf, projectId, {doi: String(req.headers['x-doi'] || '') || null, filename: name}); res.json({ok: true, project: (await store.loadProject(projectId))?.name, paper}); }
+  catch (e) { res.status(400).json({error: e.message}); }
 });
 
 app.get('/api/status', (_, res) => res.json({configured: !!process.env.OPENAI_API_KEY, model: model(), keyHint: keyHint(process.env.OPENAI_API_KEY), proxyPrefix: process.env.MARGIN_PROXY_PREFIX || '', token}));
@@ -112,6 +155,7 @@ app.get('/api/projects', async (_, res) => res.json(await store.listProjects()))
 app.post('/api/projects', async (req, res) => res.json(await store.createProject(req.body?.name)));
 app.get('/api/projects/:pid', async (req, res) => {
   const p = await projectOr404(req, res); if (!p) return;
+  lastProjectId = p.id;
   const papers = (await Promise.all(p.papers.map(store.loadPaper))).filter(Boolean).map(store.paperSummary);
   res.json({id: p.id, name: p.name, createdAt: p.createdAt, updatedAt: p.updatedAt, papers, chats: await store.chatSummaries(p.id)});
 });
@@ -195,6 +239,53 @@ app.post('/api/papers/:id/metadata', async (req, res) => {
   } catch (e) {
     res.status(502).json({error: 'Could not reach OpenAlex/Crossref. Check your connection and try again.'});
   }
+});
+
+// Add a PDF to a project; a new paper gets its details from OpenAlex/Crossref when an id or DOI is known.
+async function addPdfToProject(buf, projectId, {openalexId, doi, filename} = {}) {
+  if (buf.length > 60 * 1024 * 1024) throw new Error('The PDF is larger than 60 MB.');
+  const project = await store.loadProject(projectId);
+  if (!project) throw new Error('Project not found.');
+  const paper = await store.addPaper(buf, `${String(filename || doi || openalexId || 'paper').replace(/[\\/]/g, '_').slice(0, 120)}.pdf`);
+  await store.addToProject(project.id, paper.id);
+  if (!paper.meta && (openalexId || doi)) {
+    try {
+      const meta = (openalexId && await workById(openalexId)) || (doi && await lookupPaper({doi}));
+      if (meta) { paper.meta = {...meta, fetchedAt: now()}; paper.metaLookup = {at: now(), found: true}; if (!paper.renamed && meta.title) paper.name = cleanName(meta.title, paper.name); await store.savePaper(paper); }
+    } catch {}
+  }
+  return store.paperSummary(paper);
+}
+
+// Margin's page asks for a paper through the extension, then polls the request.
+app.post('/api/fetch-requests', async (req, res) => {
+  const {projectId, openalexId, doi, title, landing} = req.body || {};
+  if (!PROJECT_ID.test(projectId || '') || !(await store.loadProject(projectId))) return res.status(400).json({error: 'Unknown project.'});
+  if (!publicUrl(landing)) return res.status(400).json({error: 'No usable page for this paper.'});
+  pruneRequests();
+  const r = {id: randomBytes(8).toString('hex'), projectId, openalexId: /^W\d+$/.test(openalexId || '') ? openalexId : null, doi: cleanDoi(doi), title: typeof title === 'string' ? title.slice(0, 300) : null,
+    landing: String(landing), created: Date.now(), status: 'pending', paper: null, error: null, attempts: []};
+  fetchRequests.set(r.id, r);
+  res.json({id: r.id});
+});
+app.get('/api/fetch-requests/:rid', (req, res) => {
+  const r = fetchRequests.get(req.params.rid);
+  if (!r) return res.status(404).json({error: 'This request expired.'});
+  res.json({status: r.status, paper: r.paper, error: r.error, attempts: r.attempts});
+});
+app.delete('/api/fetch-requests/:rid', (req, res) => { fetchRequests.delete(req.params.rid); res.sendStatus(204); });
+// The unpacked extension folder (inside the desktop app it is shipped outside the asar archive).
+const EXT_DIR = join(root, 'extension').replace(/app\.asar([\\/])/, 'app.asar.unpacked$1');
+app.get('/api/extension', (_, res) => res.json({paired: !!process.env.MARGIN_EXT_TOKEN, lastSeen: extLastSeen, folder: EXT_DIR}));
+// Pairing code for the extension (created once; "new" replaces it, unpairing old installs).
+app.post('/api/extension/pairing', async (req, res) => {
+  if (!process.env.MARGIN_EXT_TOKEN || req.body?.renew) {
+    const code = randomBytes(18).toString('base64url');
+    const text = await readFile(ENV_FILE, 'utf8').catch(() => '');
+    await writeAtomic(ENV_FILE, updateEnvText(text, {MARGIN_EXT_TOKEN: code}));
+    process.env.MARGIN_EXT_TOKEN = code;
+  }
+  res.json({code: process.env.MARGIN_EXT_TOKEN});
 });
 
 // ---------- references ----------
@@ -297,13 +388,7 @@ app.post('/api/projects/:pid/papers/from-url', async (req, res) => {
     buf = Buffer.from(await r.arrayBuffer());
   } catch { return res.status(502).json({error: 'The open-access copy could not be downloaded. Try the publisher page instead.'}); }
   if (buf.length > 60 * 1024 * 1024 || buf.subarray(0, 5).toString() !== '%PDF-') return res.status(415).json({error: 'That link gave a web page, not a PDF. Open it and download the PDF yourself.'});
-  const paper = await store.addPaper(buf, `${(doi || openalexId || 'paper').replace(/[\\/]/g, '_')}.pdf`);
-  await store.addToProject(project.id, paper.id);
-  try {
-    const meta = (openalexId && await workById(openalexId)) || (doi && await lookupPaper({doi}));
-    if (meta && !paper.meta) { paper.meta = {...meta, fetchedAt: now()}; paper.metaLookup = {at: now(), found: true}; if (!paper.renamed && meta.title) paper.name = cleanName(meta.title, paper.name); await store.savePaper(paper); }
-  } catch {}
-  res.json(store.paperSummary(paper));
+  try { res.json(await addPdfToProject(buf, project.id, {openalexId, doi})); } catch (e) { res.status(400).json({error: e.message}); }
 });
 
 // ---------- chats (per project, focused on one paper) ----------

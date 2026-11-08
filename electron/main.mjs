@@ -55,6 +55,7 @@ app.whenReady().then(async () => {
 // ---------- sign-in window for publisher PDFs ----------
 // Publisher pages open in their own persistent session (so library/SSO logins are remembered),
 // separate from Margin's window. The first PDF that downloads there is handed back to Margin.
+ipcMain.handle('margin:open-external', (_e, url) => /^https?:\/\//i.test(url) ? shell.openExternal(url).then(() => true) : false);
 let signIn = null;
 ipcMain.handle('margin:fetch-with-login', async (event, url, title) => {
   if (!/^https?:\/\//i.test(url)) return {ok: false, reason: 'Not a web address.'};

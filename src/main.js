@@ -33,6 +33,8 @@ $('#app').innerHTML = `<header><button id="toggle-library" class="icon" title="S
 <dialog id="settings"><form id="settings-form"><h2>Settings</h2>
 <label>OpenAI API key<input id="key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-…"></label><p id="key-hint" class="hint"></p><ol class="setup-steps"><li>Sign in at <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">platform.openai.com/api-keys</a> and click <b>Create new secret key</b>.</li><li>Add credit under Billing if your account has none; answers are billed per use.</li><li>Paste the key above and click <b>Save</b>.</li></ol><nav class="openai-links" aria-label="OpenAI account pages"><a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">Create an API key ↗</a><a href="https://platform.openai.com/usage" target="_blank" rel="noopener noreferrer">Usage ↗</a><a href="https://platform.openai.com/settings/organization/billing/overview" target="_blank" rel="noopener noreferrer">Billing ↗</a></nav>
 <label>Library proxy prefix (optional)<input id="proxy-prefix" autocomplete="off" spellcheck="false" placeholder="https://proxy.lib.your-university.edu/login?url="></label><p class="hint">Used by “Get PDF” in the desktop app to open papers through your library’s sign-in. Ask your library for its proxy link prefix (EZproxy “login?url=” style).</p>
+<div class="ext-box"><b>Browser extension</b><p class="hint" id="ext-status">Lets “Add to project” use your own browser and its logins: the paper opens there and the PDF comes back automatically.</p>
+<ol class="setup-steps"><li>In Chrome (or Edge/Brave), open <code>chrome://extensions</code> and turn on <b>Developer mode</b>.</li><li>Click <b>Load unpacked</b> and choose this folder: <code id="ext-folder">…</code> <button type="button" class="small" id="ext-copy-folder">Copy</button></li><li>Click the Margin icon in the toolbar and paste the pairing code: <code id="ext-code">••••••</code> <button type="button" class="small" id="ext-show">Show code</button></li></ol></div>
 <label>Model<select id="settings-model"></select></label><label>…or type a model ID<input id="custom-model" autocomplete="off" spellcheck="false" placeholder="e.g. gpt-5.2"></label>
 <p class="hint">Stored only on this computer, in a file readable only by you, and applied immediately. A new key is checked with OpenAI before it is saved; it is sent only to OpenAI.</p>
 <p id="settings-msg" role="status"></p><div class="dialog-buttons"><button type="button" id="settings-cancel">Cancel</button><button type="submit" id="settings-save" class="primary">Save</button></div></form></dialog>`;
@@ -103,8 +105,14 @@ $('#open-settings').onclick = () => {
   const ids = [...new Set([session?.model, ...models].filter(Boolean))];
   $('#settings-model').replaceChildren(...ids.map(id => h('option', {value: id, textContent: id, selected: id === session?.model})));
   $('#settings').showModal(); $('#key').focus();
+  api('/api/extension').then(x => {
+    $('#ext-folder').textContent = x.folder; $('#ext-code').textContent = x.paired ? '••••••' : '(not created yet)';
+    $('#ext-status').textContent = x.lastSeen ? `Extension connected (last contact ${fmtDate(x.lastSeen)}). “Add to project” opens papers in your browser.` : x.paired ? 'Paired, but the extension has not contacted Margin since it started. Open any web page in your browser to wake it.' : 'Lets “Add to project” use your own browser and its logins: the paper opens there and the PDF comes back automatically.';
+  }).catch(() => {});
 };
 $('#settings-cancel').onclick = () => $('#settings').close();
+$('#ext-show').onclick = async () => { try { const {code} = await api('/api/extension/pairing', {body: {}}); $('#ext-code').textContent = code; navigator.clipboard?.writeText(code).then(() => toast('Pairing code copied.')).catch(() => {}); } catch (e) { toast(e.message); } };
+$('#ext-copy-folder').onclick = () => navigator.clipboard?.writeText($('#ext-folder').textContent).then(() => toast('Folder path copied.')).catch(() => {});
 $('#settings-form').onsubmit = async e => {
   e.preventDefault();
   const key = $('#key').value.trim(), custom = $('#custom-model').value.trim(), picked = $('#settings-model').value;
@@ -160,7 +168,16 @@ async function loadProject(pid, render = true) {
   try { localStorage.setItem('margin-project', pid); } catch {}
   if (render) renderLibrary();
 }
-async function refreshProject() { if (project) { project = await api(pathP()); renderLibrary(); } }
+// Reload the open project; when its papers changed, the citation map is rebuilt (now if it is open).
+async function refreshProject() {
+  if (!project) return;
+  const before = project.papers.map(p => p.id).sort().join(',');
+  project = await api(pathP()); renderLibrary();
+  if (project.papers.map(p => p.id).sort().join(',') !== before && mapProject === project.id) {
+    mapStale = true;
+    if (!$('#map-view').hidden) openMap();
+  }
+}
 $('#project').onchange = async e => {
   const v = e.target.value;
   if (v === '__new') {
@@ -870,6 +887,25 @@ async function getPdf(rec, button) {
   }
   const landing = rec.doi ? `https://doi.org/${rec.doi}` : rec.oaUrl || (rec.openalexId ? `https://openalex.org/${rec.openalexId}` : null);
   if (!landing) { done(); say('No link is known for this paper.'); return; }
+  // With the browser extension: open the paper in the user's own browser and wait for the PDF.
+  const ext = await api('/api/extension').catch(() => null);
+  if (ext?.paired) {
+    try {
+      const {id} = await api('/api/fetch-requests', {body: {projectId: project.id, openalexId: rec.openalexId, doi: rec.doi, title: rec.title, landing}});
+      const url = (session?.proxyPrefix || '') + landing + '#margin-request=' + id;
+      if (window.marginDesktop) await window.marginDesktop.openExternal(url); else window.open(url, '_blank', 'noopener');
+      busy('Waiting for your browser…');
+      say('Opened in your browser. Sign in if asked; the Margin extension sends the PDF back here.');
+      for (let i = 0; i < 300; i++) {           // up to 10 minutes
+        await new Promise(r => setTimeout(r, 2000));
+        const st = await api(`/api/fetch-requests/${id}`).catch(() => null);
+        if (!st) break;
+        if (st.status === 'done') { done(); await added(st.paper, 'from your browser'); return; }
+      }
+      done(); say('No PDF arrived from the browser. On the paper’s page, click the Margin icon and “Send this page’s PDF”.');
+      return;
+    } catch (e) { say('Could not hand the paper to the browser extension: ' + e.message); }
+  }
   if (window.marginDesktop) {
     const url = (session?.proxyPrefix || '') + landing;
     busy('Waiting for sign-in…');
@@ -914,12 +950,13 @@ window.addEventListener('drop', async e => {
 });
 
 // ---------- citation map ----------
-let map = null, mapProject = null;
+let map = null, mapProject = null, mapStale = false;
 async function openMap(refresh = false) {
   if (!project) return;
   document.body.classList.add('map-mode'); $('#map-view').hidden = false; hideRefCard(); hidePop();
   $('#map-project').textContent = project.name; $('#map-card').hidden = true;
-  if (map && mapProject === project.id && !refresh) { map.fit(0); return; }
+  if (map && mapProject === project.id && !refresh && !mapStale) { map.fit(0); return; }
+  mapStale = false;
   map?.destroy(); map = createMap($('#map-svg'), {onSelect: n => showMapCard(n)}); mapProject = project.id;
   const n = project.papers.length;
   $('#map-status').textContent = n ? `Building the map: fetching references and citing papers for ${n} paper${n === 1 ? '' : 's'}…` : 'Add papers to this project to see how they cite each other.';
