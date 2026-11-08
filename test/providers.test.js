@@ -113,10 +113,11 @@ test('provider settings, models and answers', async t => {
     assert.equal((await call('GET', '/api/models?provider=x')).status, 400);
   });
 
-  let pid, paperChat, projectChat;
+  let pid, paperChat, projectChat, paperId;
   await t.test('paper chat with Claude', async () => {
     pid = (await call('POST', '/api/projects', {name: 'P'})).j.id;
     const paper = (await call('POST', `/api/projects/${pid}/papers`, makePdf(['Momentum observers detect collisions in robot arms.', 'Friction is modelled as viscous.']), {'content-type': 'application/pdf', 'x-filename': 'a.pdf'})).j;
+    paperId = paper.id;
     paperChat = (await call('POST', `/api/projects/${pid}/chats`, {paperId: paper.id})).j.id;
     const pages = [{page: 1, text: 'Momentum observers detect collisions in robot arms.'}];
     const r = await call('POST', `/api/projects/${pid}/chats/${paperChat}/messages`, {question: 'What is detected?', pages});
@@ -148,6 +149,58 @@ test('provider settings, models and answers', async t => {
     assert.equal(r3.status, 502); assert.match(r3.j.error, /declined/);
   });
 
+  await t.test('paper chat: equation index and crops in the cached block; later changes as updates', async () => {
+    const chat = (await call('POST', `/api/projects/${pid}/chats`, {paperId})).j.id;
+    const pages = [{page: 1, text: 'Momentum observers detect collisions in robot arms.'}];
+    const IMG = n => 'data:image/png;base64,iVBORw0KGgo' + 'A'.repeat(n) + '=';
+    const eqs = [{label: '1', page: 1, box: {x0: 0.1, y0: 0.2, x1: 0.9, y1: 0.25}, text: 'r = K ( p − p̂ ) (1)'},
+      {label: '2', page: 1, box: {x0: 0.1, y0: 0.3, x1: 0.9, y1: 0.35}, text: '', image: IMG(4)}];
+    const ask = (question, equations) => call('POST', `/api/projects/${pid}/chats/${chat}/messages`, {question, pages, equations});
+    assert.equal((await ask('Eq?', [{...eqs[0], label: 'x y'}])).status, 400, 'bad label');
+    assert.equal((await ask('Eq?', [{...eqs[0], box: {x0: 0.5, y0: 0, x1: 0.2, y1: 1}}])).status, 400, 'bad box');
+    assert.equal((await ask('Eq?', [{...eqs[0], page: 2}])).status, 400, 'page beyond the document');
+    assert.equal((await ask('Eq?', [{...eqs[1], image: 'data:image/gif;base64,AAAA'}])).status, 400, 'bad image');
+    assert.equal((await ask('Eq?', Array(401).fill(eqs[0]))).status, 400, 'too many entries');
+    assert.equal((await ask('Explain Eq. 2', eqs)).status, 200);
+    const one = messages().at(-1).body, src = one.messages[0].content;
+    assert.equal(src[0].text, 'SOURCE DOCUMENT\n[PDF PAGE 1]\nMomentum observers detect collisions in robot arms.\n\n' +
+      'EQUATION INDEX (the numbered equations of this paper as framed in the reader: found automatically, framed by the user, or labelled with AI and accepted; this list is authoritative for equation numbers and their pages. Text is what the PDF text layer holds inside each frame, which often garbles maths; where an image is attached it shows the equation as printed.)\n' +
+      'Eq. (1) · page 1 · text: "r = K ( p − p̂ )"\nEq. (2) · page 1 · image attached');
+    assert.deepEqual(src.slice(1), [{type: 'text', text: 'Image of Eq. (2) · page 1'}, {type: 'image', source: {type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgoAAAA='}, cache_control: {type: 'ephemeral'}}]);
+    assert.match(one.system[0].text, /EQUATION INDEX after the paper text is the authoritative list/);
+    assert.match(one.system[0].text, /NOTATION\. Unless the user asks for different notation, use the paper.s exact notation[^]*take the notation from the attached equation images/);
+    // An unchanged list: the same block, byte for byte.
+    assert.equal((await ask('And then?', eqs)).status, 200);
+    const two = messages().at(-1).body;
+    assert.equal(JSON.stringify(two.messages[0]), JSON.stringify(one.messages[0]));
+    assert.equal(JSON.stringify(two.messages.at(-1).content), JSON.stringify([{type: 'text', text: 'And then?', cache_control: {type: 'ephemeral'}}]));
+    // A new poor-text equation: the block stays, the change goes with the question, with its image.
+    const eqs3 = [...eqs, {label: '3', page: 1, box: {x0: 0.1, y0: 0.4, x1: 0.9, y1: 0.45}, text: '', image: IMG(8)}];
+    assert.equal((await ask('What about (3)?', eqs3)).status, 200);
+    const three = messages().at(-1).body, last = three.messages.at(-1).content;
+    assert.equal(JSON.stringify(three.messages[0]), JSON.stringify(one.messages[0]));
+    assert.deepEqual(last.map(b => b.type), ['text', 'image', 'text']);
+    assert.equal(last[0].text, 'Image of Eq. (3) · page 1');
+    assert.match(last[2].text, /^EQUATION UPDATES SINCE YOUR LAST ANSWER .*\nAdded: Eq\. \(3\) · page 1 · image attached\n\nWhat about \(3\)\?$/s);
+    // Next turn: the update stays in the history as text (no image), the block is still the same.
+    assert.equal((await ask('Thanks', eqs3)).status, 200);
+    const four = messages().at(-1).body;
+    assert.equal(JSON.stringify(four.messages[0]), JSON.stringify(one.messages[0]));
+    assert.match(four.messages.at(-2 - 1).content, /^EQUATION UPDATES SINCE YOUR LAST ANSWER[^]*What about \(3\)\?$/);
+    assert.equal(four.messages.at(-1).content.length, 1);
+    // The chat as the app reads it: no equation state, the user message keeps its update.
+    const c = (await call('GET', `/api/projects/${pid}/chats/${chat}`)).j;
+    assert(!('eq' in c)); assert.match(c.messages[4].eqUpdate, /Added: Eq\. \(3\)/); assert.equal(c.messages[4].content, 'What about (3)?');
+    // Many entries changed (at least REBUILD_MIN, more than a quarter): the block is rebuilt with the current list.
+    const moved = [10, 11, 12, 13, 14, 15].map((n, i) => ({label: String(n), page: 1, box: {x0: 0.1, y0: 0.1 * i, x1: 0.9, y1: 0.1 * i + 0.05}, text: 'x + y = z + w(t)'}));
+    assert.equal((await ask('Rebuilt?', moved)).status, 200);
+    const five = messages().at(-1).body;
+    assert.notEqual(JSON.stringify(five.messages[0]), JSON.stringify(one.messages[0]));
+    assert.match(five.messages[0].content[0].text, /\nEq\. \(10\) · page 1 · text: "x \+ y = z \+ w\(t\)"\n/);
+    assert(!five.messages[0].content[0].text.includes('Eq. (3)'));
+    assert.equal(five.messages.at(-1).content[0].text, 'Rebuilt?');
+  });
+
   await t.test('project chat with Claude only uses keyword search', async () => {
     projectChat = (await call('POST', `/api/projects/${pid}/chats`, {scope: 'project'})).j.id;
     const r = await call('POST', `/api/projects/${pid}/chats/${projectChat}/messages`, {question: 'How are collisions detected?'});
@@ -157,8 +210,24 @@ test('provider settings, models and answers', async t => {
     const req = messages().at(-1);
     assert.match(req.body.system[0].text, /^You are a careful robotics research tutor/);
     assert.deepEqual(req.body.system[0].cache_control, {type: 'ephemeral'});
+    assert.match(req.body.system[0].text, /NOTATION\.[^]*name each paper.s symbol and keep each paper.s notation/);
     assert.match(req.body.messages[0].content[0].text, /Momentum observers detect collisions/);
     assert(!JSON.stringify(req.body.messages).includes('cache_control'));
+    assert(!req.body.messages[0].content[0].text.includes('EQUATION INDEX'), 'no equations framed yet');
+  });
+
+  await t.test('project chat: equations of the retrieved pages, crops rendered by the server', async () => {
+    // A frame over the first line of the paper (prose, no formula: its text cannot stand in for the equation).
+    assert.equal((await call('PATCH', `/api/papers/${paperId}`, {overrides: {'5': {page: 1, box: {x0: 0.1, y0: 0.07, x1: 0.8, y1: 0.1}, source: 'user'}}})).status, 200);
+    const r = await call('POST', `/api/projects/${pid}/chats/${projectChat}/messages`, {question: 'How are collisions detected?'});
+    assert.equal(r.status, 200);
+    const src = messages().at(-1).body.messages[0].content;
+    assert.match(src[0].text, /\n\nEQUATION INDEX \(per paper[^\n]*\n\n\[paper [0-9a-f]{8} · [^\]]+\]\nEq\. \(5\) · page 1 · image attached$/);
+    assert.equal(src[1].text.startsWith('Image of Eq. (5) · page 1 of paper '), true);
+    assert.equal(src[2].type, 'image'); assert.equal(src[2].source.media_type, 'image/png');
+    const png = Buffer.from(src[2].source.data, 'base64');
+    assert.equal(png.readUInt32BE(16), 800 + 12, 'the frame at 800 px plus the padding');
+    assert(!JSON.stringify(src).includes('cache_control'));
   });
 
   await t.test('adding an OpenAI key brings embeddings back while Claude answers', async () => {

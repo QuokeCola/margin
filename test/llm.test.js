@@ -64,3 +64,29 @@ test('Anthropic result: text, web sources and usage across a paused turn', () =>
   assert.equal(r.stopReason, 'end_turn');
   assert.equal(anthropicResult([{content: [{type: 'text', text: '  '}]}]).text, '');
 });
+
+test('equation crops: with the source (cached for Claude) and with the question; both providers', () => {
+  const sourceImages = [{caption: 'Image of Eq. (1) · page 2', image: IMG}, {caption: 'Image of Eq. (4) · page 3', image: 'data:image/jpeg;base64,/9j/'}];
+  const turnImages = [{caption: 'Image of Eq. (7) · page 5', image: IMG}];
+  const a = anthropicRequest({...base, sourceImages, turnImages, image: IMG});
+  assert.deepEqual(a.messages[0].content, [{type: 'text', text: base.source},
+    {type: 'text', text: 'Image of Eq. (1) · page 2'}, {type: 'image', source: {type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo='}},
+    {type: 'text', text: 'Image of Eq. (4) · page 3'}, {type: 'image', source: {type: 'base64', media_type: 'image/jpeg', data: '/9j/'}, cache_control: {type: 'ephemeral'}}]);
+  assert.deepEqual(a.messages.at(-1).content.map(b => b.type), ['image', 'text', 'image', 'text']);
+  assert.deepEqual(a.messages.at(-1).content.at(-1), {type: 'text', text: 'Why?', cache_control: {type: 'ephemeral'}});
+  assert.equal(JSON.stringify(a).split('cache_control').length - 1, 2, 'still two breakpoints');
+  assert.deepEqual(a.messages.slice(1, 3), base.history, 'history stays text');
+  // Project chats: images go with the passages, nothing in the messages is cached.
+  const p = anthropicRequest({...base, sourceImages, cache: 'system'});
+  assert.equal(p.messages[0].content.length, 5); assert(!JSON.stringify(p.messages).includes('cache_control'));
+  assert.throws(() => anthropicRequest({...base, sourceImages: [{caption: 'x', image: 'data:image/gif;base64,AAAA'}]}));
+
+  const o = openaiRequest({...base, model: 'gpt-6-astra', sourceImages, turnImages});
+  assert.deepEqual(o.input[0], {role: 'user', content: [{type: 'input_text', text: base.source},
+    {type: 'input_text', text: 'Image of Eq. (1) · page 2'}, {type: 'input_image', image_url: IMG, detail: 'high'},
+    {type: 'input_text', text: 'Image of Eq. (4) · page 3'}, {type: 'input_image', image_url: 'data:image/jpeg;base64,/9j/', detail: 'high'}]});
+  assert.deepEqual(o.input.at(-1), {role: 'user', content: [{type: 'input_text', text: 'Why?'}, {type: 'input_text', text: 'Image of Eq. (7) · page 5'}, {type: 'input_image', image_url: IMG, detail: 'high'}]});
+  // Without crops the requests are exactly as before.
+  assert.equal(JSON.stringify(openaiRequest({...base, sourceImages: [], turnImages: []})), JSON.stringify(openaiRequest(base)));
+  assert.equal(JSON.stringify(anthropicRequest({...base, sourceImages: [], turnImages: []})), JSON.stringify(anthropicRequest(base)));
+});

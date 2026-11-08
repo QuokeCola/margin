@@ -113,3 +113,28 @@ test('limiter runs at most n at once and keeps order', async () => {
   assert.equal(peak, 2);
   await assert.rejects(slot(() => { throw new Error('x'); }));
 });
+
+test('layout and crops for project chats: equations detected as in the app, crops rendered in a worker', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'margin-l-')), file = join(dir, 'p.pdf');
+  // One display equation with its number at the right margin, between two lines of prose.
+  const objs = ['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [4 0 R] /Count 1 >>', '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 5 0 R >>'];
+  const body = 'BT /F1 11 Tf 72 700 Td (The momentum observer gives a residual that converges to the torque.) Tj ET ' +
+    'BT /F1 11 Tf 220 670 Td (r = K p - K p0 - integral of tau) Tj ET BT /F1 11 Tf 520 670 Td (\\(12\\)) Tj ET ' +
+    'BT /F1 11 Tf 72 640 Td (where K is a diagonal gain matrix chosen by the designer of the system.) Tj ET';
+  objs.push(`<< /Length ${Buffer.byteLength(body)} >>\nstream\n${body}\nendstream`);
+  let out = '%PDF-1.4\n';
+  const offsets = objs.map((o, i) => { const at = Buffer.byteLength(out); out += `${i + 1} 0 obj\n${o}\nendobj\n`; return at; });
+  const xref = Buffer.byteLength(out);
+  out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n` + offsets.map(o => `${String(o).padStart(10, '0')} 00000 n \n`).join('') + `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  await writeFile(file, Buffer.from(out, 'latin1'));
+  const pool = createExtractPool(1);
+  try {
+    const {pages} = await pool.run('layout', file);
+    assert.equal(pages.length, 1); assert.equal(pages[0].W, 612);
+    assert.deepEqual(pages[0].auto.map(e => e.label), ['12']);
+    assert(pages[0].items.some(([s]) => s.startsWith('r = K p')));
+    const [url, missing] = await pool.run('crops', file, [{page: 1, box: pages[0].auto[0].box}, {page: 9, box: pages[0].auto[0].box}]);
+    assert.match(url, /^data:image\/png;base64,/); assert.equal(missing, null);
+  } finally { await pool.close(); await rm(dir, {recursive: true, force: true}); }
+});

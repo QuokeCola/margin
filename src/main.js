@@ -14,6 +14,7 @@ import {clampZoom, wheelZoomFactor, zoomAnchor, pinchStep} from './zoom.js';
 import {applyTheme, getThemePref, setThemePref} from './theme.js';
 import {KEY_ART, CLAUDE_KEY_ART, EXT_ART} from './guides.js';
 import {mergeEquations, legacyBox, normalizeLabel} from '../lib/equations.mjs';
+import {buildEntries, mentionedLabels, cropGeometry, keyOf, CAPS, PNG_MAX, JPEG_QUALITY, IMAGE_MAX} from '../lib/eq-context.mjs';
 import {createEquationEditor} from './eqedit.js';
 import {LABEL, COMPANY, providerOf, connectionText, composeHint, webTitle, searchNote, keyHint, settingsBody, savingText} from './providers.js';
 pdfjs.GlobalWorkerOptions.workerSrc = worker;
@@ -598,6 +599,7 @@ async function closePaper({keepChat = false} = {}) {
   if (!keepChat) chat = null;
   eqEditor.reset();
   doc = null; paper = null; pages = []; index = {}; overrides = {}; activeRef = null; pageBoxes = {}; autoByPage = {}; eqByPage = {}; quotePages = {}; setContext(null); hidePop(); setMarking(false); hideRefCard();
+  eqEntries = []; cropMemo = new Map(); eqCropping = Promise.resolve();
   bib = {start: null, entries: new Map()}; refHits = {}; refRecords = []; refByNum = new Map(); refsState = 'idle';
   endPinch(false); pageObserver.disconnect(); nearPages.clear();
   $('#pdf').replaceChildren(h('div', {className: 'empty', innerHTML: '<div class="paper-icon">∑</div><h2>Make room for the original.</h2><p>Add a PDF from your laptop, or pick a paper from the library.</p>'}));
@@ -1017,7 +1019,8 @@ $('#ask').onsubmit = async e => {
   const thinking = h('article', {className: 'message assistant thinking', ariaLabel: 'Margin is thinking'}, h('small', {textContent: 'MARGIN · ' + session.model}), h('div', {className: 'dots'}, h('span'), h('span'), h('span')));
   $('#messages').append(thinking); thinking.scrollIntoView({behavior: 'smooth', block: 'end'});
   try {
-    const r = await api(`/api/projects/${projectId}/chats/${target.id}/messages`, {body: {question, ...(whole ? {} : {pages}), ...(image ? {image} : {}), ...(web ? {web} : {})}});
+    const equations = whole ? null : await equationPayload(question, target.messages);
+    const r = await api(`/api/projects/${projectId}/chats/${target.id}/messages`, {body: {question, ...(whole ? {} : {pages, equations}), ...(image ? {image} : {}), ...(web ? {web} : {})}});
     target.messages.push(...r.messages); target.title = r.chat.title;
     if (project?.id === projectId) { const summary = project.chats.find(c => c.id === r.chat.id); if (summary) Object.assign(summary, r.chat); project.chats.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)); }
     if (chat === target) {
@@ -1082,7 +1085,49 @@ function persist() {
   });
 }
 // The equation set every view uses: detections, minus deleted ones, with the user's frames in their place.
-function rebuildEquations() { ({byPage: eqByPage, index} = mergeEquations(autoByPage, overrides)); }
+function rebuildEquations() { ({byPage: eqByPage, index} = mergeEquations(autoByPage, overrides)); refreshEqContext(); }
+
+// ---------- equation context for paper chats ----------
+// The paper's equations as the model gets them (lib/eq-context.mjs): one entry per framed equation with
+// the text inside its frame, and a crop of each equation whose text is poor. Entries are rebuilt from the
+// merged set whenever it changes (cheap); crops are rendered once per frame (memoised by page and box) in
+// the background after the paper opens, so sending a question rarely waits and resends identical bytes.
+let eqEntries = [], cropMemo = new Map(), eqCropping = Promise.resolve();
+function refreshEqContext() {
+  const itemsOf = n => { const el = $(`.pdf-page[data-page="${n}"]`); return el && pageBoxes[n] ? {items: pageBoxes[n], W: Number(el.dataset.width), H: Number(el.dataset.height)} : null; };
+  eqEntries = buildEntries(eqByPage, itemsOf);
+  const gen = generation, todo = eqEntries.filter(e => e.poor).slice(0, CAPS.send.images);
+  eqCropping = eqCropping.then(async () => { for (const e of todo) { if (gen !== generation) return; await chatCrop(e.page, e.box); } }).catch(() => {});
+}
+// A crop of one equation for the model: rendered directly at CROP_WIDTH (the page region only), PNG or JPEG.
+function chatCrop(pageNum, box) {
+  const key = `${pageNum}|${box.x0},${box.y0},${box.x1},${box.y1}`;
+  if (!cropMemo.has(key)) cropMemo.set(key, (async () => {
+    const page = await doc.getPage(pageNum), base = page.getViewport({scale: 1});
+    const g = cropGeometry(box, base.width, base.height);
+    const canvas = h('canvas', {width: g.w, height: g.h}), c = canvas.getContext('2d');
+    c.fillStyle = '#fff'; c.fillRect(0, 0, g.w, g.h);
+    await page.render({canvasContext: c, viewport: page.getViewport({scale: g.scale, offsetX: -g.x, offsetY: -g.y})}).promise;
+    let url = canvas.toDataURL('image/png');
+    if (url.length > PNG_MAX) url = canvas.toDataURL('image/jpeg', JPEG_QUALITY);
+    return url.length <= IMAGE_MAX ? url : null;
+  })().catch(() => null));
+  return cropMemo.get(key);
+}
+// The equation list sent with a paper-chat question: every entry, with crops of the poor-text ones (named in
+// the question or the chat first, then page order; at most CAPS.send). The server picks what the model gets.
+async function equationPayload(question, messages) {
+  const named = mentionedLabels(question), earlier = new Set(messages.slice(-28).flatMap(m => [...mentionedLabels(m.content)]));
+  const poor = eqEntries.filter(e => e.poor);
+  const rank = e => named.has(e.label) ? 0 : earlier.has(e.label) ? 1 : 2;
+  const want = new Set(poor.map((e, i) => [rank(e), i, e]).sort((a, b) => a[0] - b[0] || a[1] - b[1]).slice(0, CAPS.send.images).map(x => keyOf(x[2])));
+  const images = await Promise.all(eqEntries.map(e => want.has(keyOf(e)) ? chatCrop(e.page, e.box) : null));
+  let bytes = 0;
+  return eqEntries.map((e, i) => {
+    const image = images[i], ok = image && (bytes += image.length) <= CAPS.send.bytes;
+    return {label: e.label, page: e.page, box: e.box, text: e.text, ...(ok ? {image} : {})};
+  });
+}
 function setOverrides(next) { overrides = next; rebuildEquations(); return persist(); }
 $('#save').onclick = async () => {
   const eq = $('#equation').value.trim(), page = Number($('#map-page').value), pct = Number($('#map-y').value);
