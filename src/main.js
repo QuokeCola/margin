@@ -67,17 +67,22 @@ const isProjectChat = c => c?.scope === 'project';
 let zoom = 1;
 try { zoom = clampZoom(Number(localStorage.getItem('margin-zoom')) || 1); } catch {}
 // Short message that stays visible in every view (the status line is hidden while the map is open).
+// An optional action ({label, run}) adds a button to the toast; clicking it runs the action and hides the toast.
 let toastTimer;
-function toast(t, ms = 6000) {
+function toast(t, ms = 6000, action = null) {
   const el = $('#toast'); el.textContent = t; el.hidden = false; el.style.animation = 'none'; void el.offsetWidth; el.style.animation = '';
+  if (action) el.append(h('button', {type: 'button', className: 'toast-action', textContent: action.label, onclick: () => { el.hidden = true; clearTimeout(toastTimer); action.run(); }}));
   clearTimeout(toastTimer); toastTimer = setTimeout(() => { el.hidden = true; }, ms);
 }
 const say = t => { notice(t); toast(t); };
 const notice = t => { const el = $('#notice'); if (el.textContent === t) return; el.textContent = t; el.style.animation = 'none'; void el.offsetWidth; el.style.animation = ''; };
 
 // ---------- server ----------
+// This window's id, sent with every request: the server names it in change events (GET /api/events) it causes,
+// so the window leaves events about its own changes to the code that made them.
+const CLIENT_ID = (() => { try { return crypto.randomUUID().replace(/-/g, ''); } catch { return Math.random().toString(36).slice(2) + Date.now().toString(36); } })();
 async function api(path, opts = {}) {
-  const headers = {'X-Session-Token': session?.token || '', ...opts.headers};
+  const headers = {'X-Session-Token': session?.token || '', 'X-Margin-Client': CLIENT_ID, ...opts.headers};
   let body = opts.body;
   if (body !== undefined && !(body instanceof Uint8Array)) { body = JSON.stringify(body); headers['Content-Type'] = 'application/json'; }
   const r = await fetch(path, {method: opts.method || (body ? 'POST' : 'GET'), headers, body});
@@ -249,8 +254,12 @@ function renderProjects() {
 async function loadProject(pid, render = true) {
   project = await api(`/api/projects/${pid}`);
   try { localStorage.setItem('margin-project', pid); } catch {}
+  announceProject();
   if (render) renderLibrary();
 }
+// Tell the server which project this window shows: the extension's "Send this page's PDF" adds to it.
+function announceProject() { if (project && session) api('/api/active-project', {body: {projectId: project.id}}).catch(() => {}); }
+window.addEventListener('focus', announceProject);
 // Reload the open project; when its papers changed, the citation map is rebuilt (now if it is open).
 async function refreshProject() {
   if (!project) return;
@@ -1272,8 +1281,9 @@ async function getPdf(rec, button) {
   const label = button?.textContent; const busy = t => { if (button) { button.disabled = true; button.textContent = t; } };
   const done = () => { if (button) { button.disabled = false; button.textContent = label; } };
   const added = async (summary, how) => {
+    const fresh = !announcedRecently(summary.id); // the change event may have announced it already
     await refreshProject(); refreshProjects(); hideRefCard();
-    say(`Added “${(summary.meta?.title || summary.name).slice(0, 80)}” to ${project.name} (${how}). It is in the sidebar.`);
+    if (fresh) say(`Added “${(summary.meta?.title || summary.name).slice(0, 80)}” to ${project.name} (${how}). It is in the sidebar.`);
   };
   for (const url of [rec.pdfUrl, rec.oaUrl].filter(Boolean)) {
     busy('Downloading…');
@@ -1463,6 +1473,74 @@ function setContext(c) {
 }
 
 
+// ---------- change events from the server ----------
+// Papers can arrive without this window asking (the extension's "Send this page's PDF", a fetch request
+// answered after the window reloaded or stopped waiting, another window). The server announces every change
+// on GET /api/events (Server-Sent Events, read with fetch so the session token goes in a header).
+const ANNOUNCE_WINDOW = 15e3, recentAdds = new Map(); // paper id -> when its addition was announced here
+// True when the paper's addition was announced in the last ANNOUNCE_WINDOW ms; marks it announced now.
+function announcedRecently(id) {
+  const t = Date.now(), seen = recentAdds.get(id);
+  for (const [k, at] of recentAdds) if (t - at > ANNOUNCE_WINDOW) recentAdds.delete(k);
+  recentAdds.set(id, t);
+  return seen !== undefined && t - seen <= ANNOUNCE_WINDOW;
+}
+const VIA = {'extension': 'from your browser', 'extension-request': 'from your browser', 'open-access': 'open-access copy', 'upload': 'added in another window'};
+async function openProjectFromToast(pid) {
+  if (working || loading) { toast('Wait for the current answer to finish, then switch projects.'); return; }
+  if (pid !== project?.id && projects.some(x => x.id === pid)) await switchProject(pid);
+}
+async function onServerEvent(ev) {
+  if (ev.client && ev.client === CLIENT_ID) return; // this window's own change: its code already updated the view
+  if (ev.type === 'paper-added' && ev.paper?.id) {
+    const fresh = !announcedRecently(ev.paper.id);
+    const title = (ev.paper.meta?.title || ev.paper.name || 'Untitled paper').slice(0, 80);
+    if (ev.projectId === project?.id) {
+      await refreshProject(); await refreshProjects();
+      if (fresh) say(ev.isNew === false ? `“${title}” is already in ${project.name}.` : `Added “${title}” to ${project.name}${VIA[ev.via] ? ` (${VIA[ev.via]})` : ''}. It is in the sidebar.`);
+    } else {
+      await refreshProjects();
+      const name = projects.find(x => x.id === ev.projectId)?.name || ev.projectName || 'another project';
+      if (fresh) toast(ev.isNew === false ? `“${title}” is already in ${name}.` : `Added “${title}” to ${name}.`, 10000, {label: 'Open', run: () => openProjectFromToast(ev.projectId)});
+    }
+  } else if (ev.type === 'paper-removed') {
+    if (ev.projectId === project?.id) await refreshProject();
+    await refreshProjects();
+  } else if (ev.type === 'project-deleted') {
+    if (ev.projectId === project?.id && !working && !loading) { closeMap(); await closePaper(); project = null; await refreshProjects(); renderLibrary(); notice(`This project was deleted in another window. Now showing “${project?.name}”.`); }
+    else await refreshProjects();
+  }
+}
+// Keeps the stream open; reconnects with backoff (1 s doubling to 30 s). After a reconnect the view is
+// reloaded, since changes made while disconnected were not announced. A stream silent for longer than
+// three heartbeats (the server sends one every 20 s) is treated as dead.
+async function listenForChanges() {
+  let delay = 1000, missed = false, queue = Promise.resolve();
+  for (;;) {
+    const abort = new AbortController(); let quiet;
+    const alive = () => { clearTimeout(quiet); quiet = setTimeout(() => abort.abort(), 65e3); };
+    try {
+      const r = await fetch('/api/events', {headers: {'X-Session-Token': session.token, 'X-Margin-Client': CLIENT_ID}, cache: 'no-store', signal: abort.signal});
+      if (!r.ok || !r.body) throw Error(`events ${r.status}`);
+      delay = 1000; alive(); announceProject();
+      if (missed) queue = queue.then(() => refreshProject()).then(() => refreshProjects()).catch(() => {});
+      const reader = r.body.pipeThrough(new TextDecoderStream()).getReader();
+      let buf = '';
+      for (;;) {
+        const {value, done} = await reader.read(); if (done) break;
+        alive(); buf += value.replace(/\r\n?/g, '\n');
+        for (let i; (i = buf.indexOf('\n\n')) >= 0;) {
+          const data = buf.slice(0, i).split('\n').filter(l => l.startsWith('data:')).map(l => l.slice(5).replace(/^ /, '')).join('\n'); buf = buf.slice(i + 2);
+          let ev = null; try { ev = data && JSON.parse(data); } catch {}
+          if (ev) queue = queue.then(() => onServerEvent(ev)).catch(() => {});
+        }
+      }
+    } catch {}
+    clearTimeout(quiet); missed = true;
+    await new Promise(r => setTimeout(r, delay)); delay = Math.min(delay * 2, 30e3);
+  }
+}
+
 // ---------- start ----------
 showWelcome(); controls();
 try { session = await fetch('/api/status').then(r => r.json()); } catch { notice('Local server unavailable. Restart the app.'); }
@@ -1470,6 +1548,7 @@ showStatus();
 if (session) {
   if (!session.configured) notice(`Welcome! Open Settings to add ${keyWanted()}.`);
   await Promise.all([loadModels(), refreshProjects().then(() => renderLibrary()).catch(e => notice(e.message))]);
+  listenForChanges();
   idle(() => loadMarkdown().catch(() => {}), 3000); // so the first chat opens without waiting for the Markdown/maths code
   if (project?.papers.length && !paper) notice(session.configured ? `Project "${project.name}": pick a paper in the sidebar, or add a PDF.` : `Open Settings to add ${keyWanted()}.`);
 }

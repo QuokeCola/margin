@@ -46,6 +46,21 @@ app.use((req, res, next) => {
 // their logins, finds the PDF on the publisher page and posts it back. Requests live in memory for 30 min.
 const fetchRequests = new Map(); // id -> {id, projectId, openalexId, doi, title, landing, created, status, paper, error, attempts}
 let extLastSeen = null, lastProjectId = null;
+// The project open in Margin's window (POST /api/active-project); "Send this PDF" from the extension goes there.
+let activeProjectId = null;
+
+// ---------- change notifications (GET /api/events) ----------
+// Open windows keep a Server-Sent Events stream; every change to a project's papers is announced there,
+// whichever route made it (the window's own upload, an open-access download, or the browser extension).
+// Each event is one `data: {json}` line. `client` is the X-Margin-Client id of the window that made the
+// change (null for the extension), so that window can leave the event to its own code.
+const listeners = new Set(); // ServerResponse
+const HEARTBEAT_MS = 20e3;
+function emit(event) {
+  const line = `data: ${JSON.stringify({...event, at: new Date().toISOString()})}\n\n`;
+  for (const res of listeners) res.write(line);
+}
+const clientOf = req => { const c = String(req.headers['x-margin-client'] || ''); return /^[A-Za-z0-9_-]{8,64}$/.test(c) ? c : null; };
 const pruneRequests = () => { for (const [id, r] of fetchRequests) if (Date.now() - r.created > 30 * 60e3) fetchRequests.delete(id); };
 function extAuth(req, res, next) {
   const want = process.env.MARGIN_EXT_TOKEN || '', got = Buffer.from(String(req.headers['x-margin-ext'] || ''));
@@ -67,7 +82,7 @@ app.post('/api/ext/requests/:rid/pdf', extAuth, express.raw({type: 'application/
   if (!r || r.status !== 'pending') return res.status(404).json({error: 'This request is no longer waiting for a PDF.'});
   const buf = req.body;
   if (!Buffer.isBuffer(buf) || buf.subarray(0, 5).toString() !== '%PDF-') return res.status(415).json({error: 'Not a PDF.'});
-  try { r.paper = await addPdfToProject(buf, r.projectId, {openalexId: r.openalexId, doi: r.doi, filename: r.doi || r.title}); r.status = 'done'; res.json({ok: true}); }
+  try { r.paper = await addPdfToProject(buf, r.projectId, {openalexId: r.openalexId, doi: r.doi, filename: r.doi || r.title}, {via: 'extension-request', requestId: r.id}); r.status = 'done'; res.json({ok: true}); }
   catch (e) { res.status(400).json({error: e.message}); }
 });
 // The browser downloaded the PDF itself (some publishers refuse a second download): read that file.
@@ -81,18 +96,23 @@ app.post('/api/ext/requests/:rid/file', extAuth, express.json({limit: '8kb'}), a
   if (!st?.isFile() || Date.now() - st.mtimeMs > 10 * 60e3 || st.size > 60 * 1024 * 1024) return res.status(400).json({error: 'That file is not a recent download.'});
   const buf = await readFile(file);
   if (buf.subarray(0, 5).toString() !== '%PDF-') return res.status(415).json({error: 'Not a PDF.'});
-  try { r.paper = await addPdfToProject(buf, r.projectId, {openalexId: r.openalexId, doi: r.doi, filename: r.doi || r.title}); r.status = 'done'; res.json({ok: true}); }
+  try { r.paper = await addPdfToProject(buf, r.projectId, {openalexId: r.openalexId, doi: r.doi, filename: r.doi || r.title}, {via: 'extension-request', requestId: r.id}); r.status = 'done'; res.json({ok: true}); }
   catch (e) { res.status(400).json({error: e.message}); }
 });
 
-// "Send this PDF to Margin" from any page: goes to the project used last.
+// "Send this PDF to Margin" from any page: goes to the project open in Margin's window (the one it
+// reported last), else the project loaded last, else the first project.
+async function extTargetProject() {
+  for (const pid of [activeProjectId, lastProjectId]) if (pid && await store.loadProject(pid)) return pid;
+  return (await store.listProjects())[0]?.id || null;
+}
 app.post('/api/ext/pdf', extAuth, express.raw({type: 'application/pdf', limit: '61mb'}), async (req, res) => {
   const buf = req.body;
   if (!Buffer.isBuffer(buf) || buf.subarray(0, 5).toString() !== '%PDF-') return res.status(415).json({error: 'Not a PDF.'});
-  const projectId = lastProjectId || (await store.listProjects())[0]?.id;
+  const projectId = await extTargetProject();
   if (!projectId) return res.status(400).json({error: 'Open a project in Margin first.'});
   let name; try { name = decodeURIComponent(String(req.headers['x-filename'] || '')); } catch { name = ''; }
-  try { const paper = await addPdfToProject(buf, projectId, {doi: String(req.headers['x-doi'] || '') || null, filename: name}); res.json({ok: true, project: (await store.loadProject(projectId))?.name, paper}); }
+  try { const paper = await addPdfToProject(buf, projectId, {doi: String(req.headers['x-doi'] || '') || null, filename: name}, {via: 'extension'}); res.json({ok: true, project: (await store.loadProject(projectId))?.name, paper}); }
   catch (e) { res.status(400).json({error: e.message}); }
 });
 
@@ -105,6 +125,21 @@ app.use('/api', (req, res, next) => {
   next();
 });
 app.use(express.json({limit: '4mb'})); // paper text (≤600k chars) + optional equation image (≤2 MB)
+
+app.get('/api/events', (req, res) => {
+  res.writeHead(200, {'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', Connection: 'keep-alive', 'X-Accel-Buffering': 'no'});
+  res.write(`retry: 2000\ndata: ${JSON.stringify({type: 'hello', activeProjectId})}\n\n`);
+  listeners.add(res);
+  const beat = setInterval(() => res.write(': ping\n\n'), HEARTBEAT_MS);
+  req.on('close', () => { clearInterval(beat); listeners.delete(res); });
+});
+// The window reports the project it shows; the extension's "Send this page's PDF" adds to that project.
+app.post('/api/active-project', async (req, res) => {
+  const pid = req.body?.projectId;
+  if (!PROJECT_ID.test(pid || '') || !(await store.loadProject(pid))) return res.status(400).json({error: 'Unknown project.'});
+  activeProjectId = pid;
+  res.json({ok: true});
+});
 
 // ---------- storage ----------
 async function writeAtomic(file, data, mode = 0o600) { // used for the settings file
@@ -213,6 +248,9 @@ app.delete('/api/projects/:pid', async (req, res) => {
   const gone = (await store.loadProject(req.params.pid))?.papers || [];
   await store.deleteProject(req.params.pid);
   indexer.forget(gone);
+  if (activeProjectId === req.params.pid) activeProjectId = null;
+  if (lastProjectId === req.params.pid) lastProjectId = null;
+  emit({type: 'project-deleted', projectId: req.params.pid, client: clientOf(req)});
   res.sendStatus(204);
 });
 
@@ -225,13 +263,16 @@ app.post('/api/projects/:pid/papers', express.raw({type: 'application/pdf', limi
   if (buf.length > 60 * 1024 * 1024) return res.status(413).json({error: 'Choose a PDF smaller than 60 MB.'});
   let name; try { name = decodeURIComponent(String(req.headers['x-filename'] || '')); } catch { name = ''; }
   const paper = await store.addPaper(buf, name);
-  await store.addToProject(project.id, paper.id);
+  const isNew = !project.papers.includes(paper.id);
+  const after = await store.addToProject(project.id, paper.id);
+  emit({type: 'paper-added', projectId: project.id, projectName: project.name, papers: after?.papers.length ?? null, paper: store.paperSummary(paper), isNew, via: 'upload', client: clientOf(req)});
   res.json(store.paperSummary(paper));
 });
 app.delete('/api/projects/:pid/papers/:id', async (req, res) => {
   if (!(await projectOr404(req, res))) return;
   await store.removeFromProject(req.params.pid, req.params.id);
   indexer.forget([req.params.id]);
+  emit({type: 'paper-removed', projectId: req.params.pid, paperId: req.params.id, client: clientOf(req)});
   res.sendStatus(204);
 });
 const OPENED_AT_GRANULARITY = 10 * 60e3;
@@ -291,23 +332,29 @@ app.post('/api/papers/:id/metadata', async (req, res) => {
 });
 
 // Add a PDF to a project; a new paper gets its details from OpenAlex/Crossref when an id or DOI is known.
-async function addPdfToProject(buf, projectId, {openalexId, doi, filename} = {}) {
+// Open windows are told (event paper-added; isNew is false when the project already had this paper).
+async function addPdfToProject(buf, projectId, {openalexId, doi, filename} = {}, how = {}) {
   if (buf.length > 60 * 1024 * 1024) throw new Error('The PDF is larger than 60 MB.');
   const project = await store.loadProject(projectId);
   if (!project) throw new Error('Project not found.');
+  const announce = (summary, isNew, papers = project.papers.length) => {
+    emit({type: 'paper-added', projectId: project.id, projectName: project.name, papers, paper: summary, isNew, via: how.via || 'other', requestId: how.requestId || null, client: how.client || null});
+    return summary;
+  };
   // The same article downloaded twice is a different file (IEEE stamps each download): keep the one already there.
   const wanted = cleanDoi(doi);
   if (wanted) for (const p of (await Promise.all(project.papers.map(store.loadPaper))).filter(Boolean))
-    if (cleanDoi(p.meta?.doi) === wanted) return store.paperSummary(p);
+    if (cleanDoi(p.meta?.doi) === wanted) return announce(store.paperSummary(p), false);
   const paper = await store.addPaper(buf, `${String(filename || doi || openalexId || 'paper').replace(/[\\/]/g, '_').slice(0, 120)}.pdf`);
-  await store.addToProject(project.id, paper.id);
+  const isNew = !project.papers.includes(paper.id);
+  const after = await store.addToProject(project.id, paper.id);
   if (!paper.meta && (openalexId || doi)) {
     try {
       const meta = (openalexId && await workById(openalexId)) || (doi && await lookupPaper({doi}));
       if (meta) { paper.meta = {...meta, fetchedAt: now()}; paper.metaLookup = {at: now(), found: true}; if (!paper.renamed && meta.title) paper.name = cleanName(meta.title, paper.name); await store.savePaper(paper); }
     } catch {}
   }
-  return store.paperSummary(paper);
+  return announce(store.paperSummary(paper), isNew, after?.papers.length);
 }
 
 // Margin's page asks for a paper through the extension, then polls the request.
@@ -448,7 +495,7 @@ app.post('/api/projects/:pid/papers/from-url', async (req, res) => {
     buf = Buffer.from(await r.arrayBuffer());
   } catch { return res.status(502).json({error: 'The open-access copy could not be downloaded. Try the publisher page instead.'}); }
   if (buf.length > 60 * 1024 * 1024 || buf.subarray(0, 5).toString() !== '%PDF-') return res.status(415).json({error: 'That link gave a web page, not a PDF. Open it and download the PDF yourself.'});
-  try { res.json(await addPdfToProject(buf, project.id, {openalexId, doi})); } catch (e) { res.status(400).json({error: e.message}); }
+  try { res.json(await addPdfToProject(buf, project.id, {openalexId, doi}, {via: 'open-access', client: clientOf(req)})); } catch (e) { res.status(400).json({error: e.message}); }
 });
 
 // ---------- chats (per project: about one paper, or about the whole project) ----------
