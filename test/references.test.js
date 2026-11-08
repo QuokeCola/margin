@@ -15,10 +15,27 @@ test('inline mentions keep their position', () => {
 });
 test('equation tags and tokens', () => {
   assert.equal(tagOf('\\dot r = K(p - \\hat p) \\tag{24}'), '24'); assert.equal(tagOf('x^2'), null);
-  assert.deepEqual([...'a [[eq:6b|p:3]] b [[p:9]]'.matchAll(TOKEN)].map(m => tokenRef(m[1], m[2], m[3])), [{equation: '6b', page: 3}, {equation: null, page: 9}]);
+  assert.deepEqual([...'a [[eq:6b|p:3]] b [[p:9]]'.matchAll(TOKEN)].map(m => tokenRef(...m.slice(1))), [{equation: '6b', page: 3}, {equation: null, page: 9}]);
 });
 import {QUOTE} from '../src/references.js';
 test('quote tokens', () => {
   const m = [...'As stated, [[quote:7|the residual r is a filtered version of tau_ext]] holds.'.matchAll(QUOTE)];
-  assert.equal(m.length, 1); assert.equal(m[0][1], '7'); assert.equal(m[0][2], 'the residual r is a filtered version of tau_ext');
+  assert.equal(m.length, 1); assert.equal(m[0][1], undefined); assert.equal(m[0][2], '7'); assert.equal(m[0][3], 'the residual r is a filtered version of tau_ext');
+});
+import {ANCHOR, quoteRef, structuredRefs} from '../src/references.js';
+test('cross-paper anchors carry the paper id; the old forms still parse', () => {
+  const t = 'Adam [[cite:3fa9c2d1:2|estimates of lower-order moments]] vs [[cite:4|old style anchor words]], ' +
+    '[[quote:ABCDEF12:7|exact words here]], [[p:3fa9c2d1:11]], [[eq:6b|p:3fa9c2d1:3]], [[eq:2|p:5]], [[p:9]].';
+  assert.deepEqual(structuredRefs(t), [
+    {page: 2, quote: 'estimates of lower-order moments', anchor: true, paper: '3fa9c2d1'},
+    {page: 4, quote: 'old style anchor words', anchor: true},
+    {page: 7, quote: 'exact words here', paper: 'abcdef12'},
+    {equation: null, page: 11, paper: '3fa9c2d1'},
+    {equation: '6b', page: 3, paper: '3fa9c2d1'},
+    {equation: '2', page: 5},
+    {equation: null, page: 9},
+  ]);
+  // Too-short ids are not paper ids, and a label in place of an id is left as text.
+  assert.equal([...'[[cite:abc:4|some words here]] [[cite:Kingma 2015:4|some words here]]'.matchAll(ANCHOR)].length, 0);
+  assert.deepEqual(quoteRef(undefined, '3', ' a  b\nc '), {page: 3, quote: 'a b c'});
 });

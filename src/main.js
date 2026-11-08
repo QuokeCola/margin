@@ -5,7 +5,8 @@ import DOMPurify from 'dompurify';
 import renderMath from 'katex/contrib/auto-render';
 import 'katex/dist/katex.min.css';
 import './style.css';
-import {parseReferences, resolveReference, TOKEN, tokenRef, findMentions, tagOf, QUOTE, ANCHOR} from './references.js';
+import {parseReferences, resolveReference, TOKEN, tokenRef, findMentions, tagOf, QUOTE, ANCHOR, quoteRef, structuredRefs} from './references.js';
+import {paperLabels, resolvePaper, shortId} from '../lib/labels.mjs';
 import {findQuote, textBoxes, detectEquations} from './layout.js';
 import {parseBibliography, findMarkers, matchEntries} from './bib.js';
 import {createMap} from './map.js';
@@ -18,8 +19,8 @@ $('#app').innerHTML = `<header><button id="toggle-library" class="icon" title="S
 <div class="header-tools"><label class="model-picker" title="Model used for new answers">Model <select id="model" disabled><option>…</option></select></label><span id="connection">Connecting…</span><button id="open-settings">Settings</button></div></header>
 <main><aside class="library"><div class="project-bar"><small>PROJECT</small><div class="project-row"><select id="project" aria-label="Project"></select><button id="project-rename" class="icon" title="Rename project" aria-label="Rename project">✎</button><button id="project-delete" class="icon del" title="Delete project" aria-label="Delete project">×</button></div><button id="open-map" class="map-button" title="How the papers in this project cite each other">◎ Citation map</button></div>
 <div class="lib-section"><div class="lib-head"><small>PAPERS</small><label class="file-button small">+ Add PDF<input id="file" type="file" accept="application/pdf"></label></div><ul id="papers" aria-label="Papers"></ul></div>
-<div class="lib-section"><div class="lib-head"><small>CHATS</small><button id="new-chat-side" class="small" title="New chat about the open paper">+ New</button></div><ul id="chats" aria-label="Chats"></ul></div></aside>
-<section class="chat"><div class="section-head"><div><small id="chat-paper">YOUR STUDY DESK</small><h1 id="chat-title">Read. Question. Understand.</h1></div><button id="new-chat" disabled>New chat</button></div><div id="messages" tabindex="0" aria-label="Conversation"></div><form id="ask"><div id="context" hidden></div><textarea id="question" aria-label="Question about the paper" placeholder="What would you like to understand?" rows="3" maxlength="8000"></textarea><div class="compose-bottom"><span>Enter to send · Ctrl+Enter for a new line. Paper text + this chat are sent to OpenAI.</span><button id="send" type="submit">Ask ↗</button></div></form><p id="notice" role="status">Add a PDF, or pick one from the library.</p></section>
+<div class="lib-section"><div class="lib-head"><small>CHATS</small><button id="new-chat-side" class="small" title="New chat: about the open paper, or the whole project">+ New</button></div><ul id="chats" aria-label="Chats"></ul></div></aside>
+<section class="chat"><div class="section-head"><div><small id="chat-paper">YOUR STUDY DESK</small><h1 id="chat-title">Read. Question. Understand.</h1></div><button id="new-chat" disabled>New chat</button></div><div id="messages" tabindex="0" aria-label="Conversation"></div><form id="ask"><div id="context" hidden></div><textarea id="question" aria-label="Question about the paper" placeholder="What would you like to understand?" rows="3" maxlength="8000"></textarea><div class="compose-bottom"><span id="compose-hint">Enter to send · Ctrl+Enter for a new line. Paper text + this chat are sent to OpenAI.</span><div class="compose-actions"><button type="button" id="web-toggle" class="web-toggle" aria-pressed="false" title="Let the answer search the web (OpenAI web search, billed per search). Off by default.">⌕ Web</button><button id="send" type="submit">Ask ↗</button></div></div></form><p id="notice" role="status">Add a PDF, or pick one from the library.</p></section>
 <section class="reader"><div class="section-head"><div><small>SOURCE DOCUMENT</small><h2 id="filename">Your paper, in context</h2><p id="paper-byline"></p></div><button id="paper-info" class="small" disabled title="Paper details: authors, venue, DOI, abstract">ⓘ Info</button></div><div class="toolbar"><label><input id="follow" type="checkbox" checked> Follow chat</label><div><label>Page <input id="page" type="number" min="1" value="1"></label><span id="total">/ —</span><button id="go">Go</button></div><button id="marker" title="Marker: drag a box over any part of the page to ask about it (Esc to cancel)" aria-pressed="false">✎ Mark</button><div class="zoom" title="Pinch the trackpad (or Ctrl + scroll) over the page to zoom"><button id="zoom-out" aria-label="Zoom out">−</button><button id="zoom-reset" title="Reset to 100%">100%</button><button id="zoom-in" aria-label="Zoom in">+</button></div></div><div id="pdf"><div class="empty"><div class="paper-icon">∑</div><h2>Make room for the original.</h2><p>Add a PDF from your laptop, or pick a paper from the library.<br>Pinch the trackpad over a page to zoom.</p></div></div><details id="manual"><summary>Find a reference / correct an equation location</summary><div class="manual-grid"><label>Equation <input id="equation" placeholder="61"></label><label>PDF page <input id="map-page" type="number" min="1" value="1"></label><label>Position from top (%) <input id="map-y" type="number" min="0" max="100" value="50"></label><button id="find">Find equation</button><button id="save">Save correction</button><button id="remove">Remove correction</button></div><p>Corrections are saved with this paper in your library. Click the PDF while this panel is open to pick a position. Pages use PDF order, not printed journal numbers.</p></details></section>
 <section id="map-view" hidden aria-label="Citation map"><div class="map-bar"><button id="map-back">← Back to reading</button><div class="map-title"><small>CITATION MAP</small><h2 id="map-project"></h2></div>
 <div class="map-filters"><label><input type="checkbox" id="mf-refs" checked> <i class="dot k-reference"></i>References</label><label><input type="checkbox" id="mf-citing" checked> <i class="dot k-citing"></i>Citing papers</label><label title="Only papers linked to two or more of your papers"><input type="checkbox" id="mf-shared"> Only shared</label><label><input type="checkbox" id="mf-year"> Arrange by year</label><button id="map-fit" class="small" title="Fit the map to the window">Fit</button><button id="map-refresh" class="small" title="Fetch references and citations again">↻</button></div></div>
@@ -28,6 +29,7 @@ $('#app').innerHTML = `<header><button id="toggle-library" class="icon" title="S
 <div id="ref-card" hidden role="dialog" aria-label="Reference"></div>
 <div id="drop-zone" hidden><div>Drop the PDF to add it to the project</div></div>
 <div id="pdf-pop" hidden><button type="button" id="pop-ask">Ask AI ↗</button></div>
+<div id="new-chat-menu" hidden role="menu" aria-label="New chat"><button type="button" role="menuitem" data-scope="paper"><b>This paper</b><small></small></button><button type="button" role="menuitem" data-scope="project"><b>Whole project</b><small>Searches all papers in this project; answers cite each paper</small></button></div>
 <dialog id="ask-text"><form id="ask-text-form"><h2 id="ask-text-title"></h2><label><input id="ask-text-input" autocomplete="off" maxlength="200"></label><div class="dialog-buttons"><button type="button" id="ask-text-cancel">Cancel</button><button type="submit" class="primary">Save</button></div></form></dialog>
 <dialog id="info"><div class="info-body"><div id="info-content"></div><div class="info-lookup"><label>DOI<input id="info-doi" placeholder="10.1109/…" autocomplete="off" spellcheck="false"></label><button type="button" id="info-lookup">Look up</button></div><p id="info-msg" role="status"></p><div class="dialog-buttons"><button type="button" id="info-close" class="primary">Close</button></div></div></dialog>
 <dialog id="settings"><form id="settings-form"><h2>Settings</h2>
@@ -44,6 +46,8 @@ let doc = null, pages = [], index = {}, overrides = {};
 let pageBoxes = {}, eqByPage = {}, context = null;
 let bib = {start: null, entries: new Map()}, refHits = {}, refRecords = [], refByNum = new Map(), refsState = 'idle'; // references of the open paper // text-item geometry and detected equations per page; pending attachment
 let working = false, loading = false, generation = 0, activeRef = null, renderQueue = Promise.resolve();
+let webSearch = false; // per launch: answers may use OpenAI web search when switched on
+const isProjectChat = c => c?.scope === 'project';
 let zoom = 1;
 try { zoom = clampZoom(Number(localStorage.getItem('margin-zoom')) || 1); } catch {}
 // Short message that stays visible in every view (the status line is hidden while the map is open).
@@ -68,11 +72,11 @@ async function api(path, opts = {}) {
 }
 
 function controls() {
-  $('#send').disabled = !doc || !chat || working || loading;
+  $('#send').disabled = !chat || (!doc && !isProjectChat(chat)) || working || loading;
   $('#file').disabled = working || loading;
-  $('#new-chat').disabled = !paper || working || loading;
+  $('#new-chat').disabled = !project || working || loading;
   for (const id of ['#papers', '#chats']) $(id).classList.toggle('locked', working || loading);
-  $('#project').disabled = working || loading; $('#new-chat-side').disabled = !paper || working || loading;
+  $('#project').disabled = working || loading; $('#new-chat-side').disabled = !project || working || loading;
 }
 
 // ---------- settings & models ----------
@@ -211,11 +215,11 @@ function renderLibrary() {
       h('button', {className: 'icon del', textContent: '×', title: 'Remove from this project (and its chats here)', onclick: () => removePaper(p)})));
   }) : [h('li', {className: 'library-empty', textContent: 'No papers in this project yet. Add a PDF.'})]));
   const titles = Object.fromEntries(project.papers.map(p => [p.id, paperTitle(p)]));
-  chatsEl.replaceChildren(...(project.chats.length ? project.chats.map(c => h('li', {className: c.id === chat?.id ? 'active' : ''},
-    h('button', {className: 'chat-name', title: 'Double-click to rename', onclick: () => c.id !== chat?.id && selectChat(c), ondblclick: () => renameChat(c)},
-      h('span', {textContent: c.title}), h('small', {textContent: `${(titles[c.paperId] || 'Removed paper').slice(0, 28)} · ${fmtDate(c.updatedAt)}`})),
+  chatsEl.replaceChildren(...(project.chats.length ? project.chats.map(c => h('li', {className: (c.id === chat?.id ? 'active' : '') + (isProjectChat(c) ? ' project-chat' : '')},
+    h('button', {className: 'chat-name', title: (isProjectChat(c) ? 'About all papers of this project' : `About “${titles[c.paperId] || 'a removed paper'}”`) + '\nDouble-click to rename', onclick: () => c.id !== chat?.id && selectChat(c), ondblclick: () => renameChat(c)},
+      h('span', {textContent: c.title}), h('small', {textContent: `${isProjectChat(c) ? '◎ Whole project' : (titles[c.paperId] || 'Removed paper').slice(0, 28)} · ${fmtDate(c.updatedAt)}`})),
     h('button', {className: 'icon del', textContent: '×', title: 'Delete this chat', onclick: () => deleteChat(c)}))) : [h('li', {className: 'library-empty', textContent: 'No chats yet.'})]));
-  $('#new-chat-side').disabled = !paper || working || loading;
+  $('#new-chat-side').disabled = !project || working || loading;
 }
 async function renamePaper(p) {
   const name = await askText('Rename paper', paperTitle(p)); if (!name?.trim()) return;
@@ -224,7 +228,7 @@ async function renamePaper(p) {
 async function removePaper(p) {
   const n = project.chats.filter(c => c.paperId === p.id).length;
   if (!confirm(`Remove "${paperTitle(p)}" from "${project.name}"${n ? ` and delete its ${n} chat${n === 1 ? '' : 's'} here` : ''}? If no other project uses it, the stored PDF is deleted too.`)) return;
-  try { await api(pathP('papers', p.id), {method: 'DELETE'}); if (paper?.id === p.id) await closePaper(); await refreshProject(); refreshProjects(); notice('Paper removed from the project.'); } catch (e) { notice(e.message); }
+  try { await api(pathP('papers', p.id), {method: 'DELETE'}); if (paper?.id === p.id) await closePaper({keepChat: isProjectChat(chat)}); await refreshProject(); refreshProjects(); notice('Paper removed from the project.'); } catch (e) { notice(e.message); }
 }
 async function renameChat(c) {
   const title = await askText('Rename chat', c.title); if (!title?.trim()) return;
@@ -235,37 +239,50 @@ async function deleteChat(c) {
   try {
     await api(pathP('chats', c.id), {method: 'DELETE'});
     project.chats = project.chats.filter(x => x.id !== c.id);
-    if (chat?.id === c.id) { const next = project.chats.find(x => x.paperId === paper?.id); if (next) await selectChat(next); else await newChat(); }
+    if (chat?.id === c.id) {
+      const next = paper && project.chats.find(x => !isProjectChat(x) && x.paperId === paper.id);
+      if (next) await selectChat(next); else if (paper) await newChat(); else { chat = null; showWelcome(); controls(); }
+    }
     renderLibrary();
   } catch (e) { notice(e.message); }
 }
-async function newChat() {
-  if (!paper || working) return;
-  try { const c = await api(pathP('chats'), {body: {paperId: paper.id}}); project.chats.unshift({id: c.id, title: c.title, paperId: c.paperId, createdAt: c.createdAt, updatedAt: c.updatedAt, count: 0}); showChat(c); $('#question').focus(); } catch (e) { notice(e.message); }
+// A new chat about the open paper (scope 'paper') or about all papers of the project (scope 'project').
+async function newChat(scope = 'paper') {
+  if (!project || working || (scope === 'paper' && !paper)) return;
+  try {
+    const c = await api(pathP('chats'), {body: scope === 'project' ? {scope} : {paperId: paper.id}});
+    project.chats.unshift({id: c.id, title: c.title, scope: c.scope, paperId: c.paperId, createdAt: c.createdAt, updatedAt: c.updatedAt, count: 0});
+    showChat(c); $('#question').focus();
+  } catch (e) { notice(e.message); }
 }
-// A chat is about one paper for now; selecting a chat of another paper opens that paper.
+// Selecting a chat about another paper opens that paper; a project chat keeps whatever paper is open.
 async function selectChat(c) {
   if (working) return;
-  if (c.paperId && c.paperId !== paper?.id) { await openPaper(c.paperId, null, c.id); return; }
+  if (!isProjectChat(c) && c.paperId && c.paperId !== paper?.id) { await openPaper(c.paperId, null, c.id); return; }
   try { showChat(await api(pathP('chats', c.id))); } catch (e) { notice(e.message); }
 }
 function showChat(c) {
   chat = c; activeRef = null;
   $('#chat-title').textContent = c.title;
   $('#messages').replaceChildren();
-  if (!c.messages.length) $('#messages').append(h('div', {className: 'chat-empty'}, h('p', {textContent: 'Ask anything about this paper. Answers cite PDF pages and equations; select a citation to bring the source into view.'}), h('button', {className: 'suggestion', textContent: 'Summarize the main contributions of this paper.', onclick: e => { $('#question').value = e.target.textContent; $('#question').focus(); }})));
+  const whole = isProjectChat(c);
+  $('#compose-hint').textContent = whole ? 'Enter to send · Ctrl+Enter for a new line. Passages from this project\'s papers + this chat are sent to OpenAI.' : 'Enter to send · Ctrl+Enter for a new line. Paper text + this chat are sent to OpenAI.';
+  showPaperHeader();
+  if (!c.messages.length) $('#messages').append(h('div', {className: 'chat-empty'},
+    h('p', {textContent: whole ? `Ask across all ${project.papers.length} paper${project.papers.length === 1 ? '' : 's'} of “${project.name}”. Margin searches them for the passages that matter; each citation names its paper, and selecting it opens that paper at the passage.` : 'Ask anything about this paper. Answers cite PDF pages and equations; select a citation to bring the source into view.'}),
+    h('button', {className: 'suggestion', textContent: whole ? 'Compare the main contributions and assumptions of these papers.' : 'Summarize the main contributions of this paper.', onclick: e => { $('#question').value = e.target.textContent; $('#question').focus(); }})));
   for (const m of c.messages) addMessage(m.role, m.content, m, false);
   $('#messages').scrollTop = $('#messages').scrollHeight;
   renderLibrary(); controls();
 }
-$('#new-chat-side').onclick = () => newChat();
+$('#new-chat-side').onclick = e => openChatMenu(e.currentTarget);
 
 // ---------- paper details (OpenAlex / Crossref) ----------
 function showPaperHeader() {
   const t = paper ? paperTitle(paper) : 'Your paper, in context';
   $('#filename').textContent = t; $('#filename').title = t;
   $('#paper-byline').textContent = paper?.meta ? byline(paper.meta) : '';
-  $('#chat-paper').textContent = paper ? t.toUpperCase() : 'YOUR STUDY DESK';
+  $('#chat-paper').textContent = isProjectChat(chat) && project ? `WHOLE PROJECT · ${project.name.toUpperCase()}` : paper ? t.toUpperCase() : 'YOUR STUDY DESK';
   $('#paper-info').disabled = !paper;
 }
 // DOI candidates and a title guess (the largest text near the top of page 1) for the lookup.
@@ -342,15 +359,18 @@ async function destroyDoc() {
   const d = doc; doc = null;
   try { await d?.loadingTask?.destroy(); } catch (e) { console.warn('PDF cleanup failed', e); }
 }
-async function closePaper() {
+// keepChat: a project chat stays on screen while another paper opens (e.g. from one of its citations).
+async function closePaper({keepChat = false} = {}) {
   generation++;
   await renderQueue.catch(() => {});
   await destroyDoc();
-  doc = null; paper = null; chat = null; pages = []; index = {}; overrides = {}; activeRef = null; pageBoxes = {}; eqByPage = {}; setContext(null); hidePop(); setMarking(false); hideRefCard();
+  if (!keepChat) chat = null;
+  doc = null; paper = null; pages = []; index = {}; overrides = {}; activeRef = null; pageBoxes = {}; eqByPage = {}; setContext(null); hidePop(); setMarking(false); hideRefCard();
   bib = {start: null, entries: new Map()}; refHits = {}; refRecords = []; refByNum = new Map(); refsState = 'idle';
   $('#pdf').replaceChildren(h('div', {className: 'empty', innerHTML: '<div class="paper-icon">∑</div><h2>Make room for the original.</h2><p>Add a PDF from your laptop, or pick a paper from the library.</p>'}));
   $('#total').textContent = '/ —';
-  showWelcome(); controls(); renderLibrary();
+  if (keepChat && chat) showPaperHeader(); else showWelcome();
+  controls(); renderLibrary();
 }
 
 $('#file').onchange = async e => {
@@ -369,11 +389,11 @@ $('#file').onchange = async e => {
   finally { loading = false; controls(); }
 };
 
-async function openPaper(id, bytes, chatId) {
+async function openPaper(id, bytes, chatId, {keepChat = isProjectChat(chat) && !chatId} = {}) {
   if (working || loading) return;
   loading = true; controls();
   try {
-    await closePaper();
+    await closePaper({keepChat});
     loading = true; controls();
     const gen = generation;
     notice('Opening paper…');
@@ -406,8 +426,9 @@ async function openPaper(id, bytes, chatId) {
       el.dataset.page = n; el.dataset.width = vp.width; el.dataset.height = vp.height; sizePage(el);
       $('#pdf').append(el); pageObserver.observe(el);
     }
-    const mine = project.chats.filter(c => c.paperId === id), pick = mine.find(c => c.id === chatId) || mine[0];
-    if (pick) showChat(await api(pathP('chats', pick.id))); else { loading = false; await newChat(); }
+    const mine = project.chats.filter(c => !isProjectChat(c) && c.paperId === id), pick = mine.find(c => c.id === chatId) || mine[0];
+    if (keepChat && chat) showPaperHeader();
+    else if (pick) showChat(await api(pathP('chats', pick.id))); else { loading = false; await newChat(); }
     notice(`Ready · ${pages.length} pages · ${Object.keys(index).length} detected equations. ${pages.every(p => !p.text.trim()) ? 'No text detected: OCR this PDF before asking questions.' : ''}`);
     indexReferences(); if (paper.meta) loadReferences(); else maybeLookup();
   } catch (err) { await destroyDoc(); notice('Could not open PDF: ' + err.message); }
@@ -473,7 +494,26 @@ $('#zoom-reset').onclick = () => setZoom(1);
 $('#zoom-reset').textContent = Math.round(zoom * 100) + '%';
 
 // ---------- citations ----------
-async function navigate(ref) {
+// A citation of a project chat names its paper (ref.paper, an id prefix); that paper is opened first
+// unless switchPaper is false (automatic following only moves within the open paper).
+const refPaper = ref => ref.paper ? resolvePaper(ref.paper, project?.papers || []) : null;
+const isLocal = ref => !ref.paper || refPaper(ref)?.id === paper?.id;
+// Automatic following (switchPaper false) stands back while a paper loads and just after the user
+// picked a citation, so focusing or scrolling the answer does not move away from the chosen passage.
+let pickedAt = 0;
+async function navigate(ref, {switchPaper = true} = {}) {
+  if (switchPaper) pickedAt = Date.now();
+  else if (loading || Date.now() - pickedAt < 1500) return;
+  if (ref.paper) {
+    const target = refPaper(ref);
+    if (!target) { notice('That paper is no longer in this project.'); return; }
+    if (target.id !== paper?.id) {
+      if (!switchPaper) return;
+      if (working || loading) { notice('Wait for the answer to finish, then select the citation again.'); return; }
+      await openPaper(target.id, null, null, {keepChat: true});
+      if (paper?.id !== target.id) return;
+    }
+  }
   if (!doc) return;
   if (ref.quote) return navigateQuote(ref);
   const target = resolveReference(ref, index, overrides, doc.numPages);
@@ -524,27 +564,30 @@ async function navigateQuote(ref) {
 }
 
 const words4 = q => { const w = q.split(/\s+/); return w.slice(0, 4).join(' ') + (w.length > 4 ? '…' : ''); };
-const refLabel = ref => ref.anchor ? `p. ${ref.page} · “${words4(ref.quote)}”` : ref.quote ? `“${ref.quote.split(/\s+/).slice(0, 5).join(' ')}…” · p. ${ref.page}` : ref.equation ? `Eq. (${ref.equation})${ref.page ? ' · p. ' + ref.page : ''}` : `Page ${ref.page}`;
+// Author-year label of a citation's paper ("Kingma & Ba 2015 · "), empty for citations without a paper.
+const paperTag = ref => { if (!ref.paper) return ''; const p = refPaper(ref); return (p ? paperLabels(project.papers).get(p.id) : 'Removed paper') + ' · '; };
+const refLabel = ref => paperTag(ref) + (ref.anchor ? `p. ${ref.page} · “${words4(ref.quote)}”` : ref.quote ? `“${ref.quote.split(/\s+/).slice(0, 5).join(' ')}…” · p. ${ref.page}` : ref.equation ? `Eq. (${ref.equation})${ref.page ? ' · p. ' + ref.page : ''}` : `Page ${ref.page}`);
 const MATH = /\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\$\$[\s\S]*?\$\$/g;
 
 // Markdown + KaTeX, with citations made clickable where they appear:
 // [[eq:..]] tokens become inline chips, a chip (or \tag{n}) right after a display
 // equation makes the whole equation a link, and plain "Eq. (61)" / "p. 4" text is linked.
-function renderBody(text, linkRefs) {
+// In project chats (whole = true) plain-text mentions are not linked: they do not say which paper.
+function renderBody(text, linkRefs, whole = false) {
   const body = h('div', {className: 'message-body'});
   const math = [], cites = [], quotes = [];
   const anchors = [];
-  let t = linkRefs ? text.replace(QUOTE, (_, p, q) => { quotes.push({page: Number(p), quote: q.replace(/\s+/g, ' ').trim()}); return `QUOTEPH${quotes.length - 1}END`; })
-    .replace(ANCHOR, (_, p, q) => { anchors.push({page: Number(p), quote: q.replace(/\s+/g, ' ').trim(), anchor: true}); return `ANCHPH${anchors.length - 1}END`; }) : text;
+  let t = linkRefs ? text.replace(QUOTE, (_, id, p, q) => { quotes.push(quoteRef(id, p, q)); return `QUOTEPH${quotes.length - 1}END`; })
+    .replace(ANCHOR, (_, id, p, q) => { anchors.push(quoteRef(id, p, q, true)); return `ANCHPH${anchors.length - 1}END`; }) : text;
   t = t.replace(MATH, m => { math.push(m); return `MATHPH${math.length - 1}END`; });
-  if (linkRefs) t = t.replace(TOKEN, (_, eq, p1, p2) => { cites.push(tokenRef(eq, p1, p2)); return `CITEPH${cites.length - 1}END`; });
+  if (linkRefs) t = t.replace(TOKEN, (_, ...g) => { cites.push(tokenRef(...g.slice(0, 5))); return `CITEPH${cites.length - 1}END`; });
   body.innerHTML = DOMPurify.sanitize(marked.parse(t));
   body.querySelectorAll('img').forEach(img => img.remove());
   body.querySelectorAll('a').forEach(a => { a.rel = 'noopener noreferrer'; a.target = '_blank'; });
   const escape = s => { const span = document.createElement('span'); span.textContent = s; return span.innerHTML; };
   body.innerHTML = body.innerHTML.replace(/MATHPH(\d+)END/g, (_, i) => escape(math[Number(i)])).replace(/CITEPH(\d+)END/g, (_, i) => `<button type="button" class="cite" data-i="${i}"></button>`).replace(/QUOTEPH(\d+)END/g, (_, i) => `<button type="button" class="quote-link" data-q="${i}"></button>`).replace(/ANCHPH(\d+)END/g, (_, i) => `<button type="button" class="cite anchor" data-a="${i}"></button>`);
-  body.querySelectorAll('button.cite.anchor').forEach(b => { b.ref = anchors[Number(b.dataset.a)]; b.textContent = refLabel(b.ref); b.title = `Highlight in the paper: “${b.ref.quote}”`; });
-  body.querySelectorAll('button.quote-link').forEach(b => { b.ref = quotes[Number(b.dataset.q)]; b.append(h('span', {textContent: `“${b.ref.quote}”`}), h('small', {textContent: ` p. ${b.ref.page} ↗`})); b.title = 'Highlight this passage in the paper'; });
+  body.querySelectorAll('button.cite.anchor').forEach(b => { b.ref = anchors[Number(b.dataset.a)]; b.textContent = refLabel(b.ref); b.title = `${b.ref.paper ? 'Open the paper and highlight' : 'Highlight in the paper'}: “${b.ref.quote}”`; });
+  body.querySelectorAll('button.quote-link').forEach(b => { b.ref = quotes[Number(b.dataset.q)]; b.append(h('span', {textContent: `“${b.ref.quote}”`}), h('small', {textContent: ` ${paperTag(b.ref)}p. ${b.ref.page} ↗`})); b.title = 'Highlight this passage in the paper'; });
   body.querySelectorAll('button.cite:not(.anchor)').forEach(b => { b.ref = cites[Number(b.dataset.i)]; b.textContent = refLabel(b.ref); b.title = 'Show in the paper'; });
   renderMath(body, {delimiters: [{left: '$$', right: '$$', display: true}, {left: '\\[', right: '\\]', display: true}, {left: '\\(', right: '\\)', display: false}], throwOnError: false});
   if (!linkRefs) return body;
@@ -555,7 +598,7 @@ function renderBody(text, linkRefs) {
     while (next && next.nodeType === Node.TEXT_NODE && !next.textContent.trim()) next = next.nextSibling;
     let ref = null;
     if (next?.classList?.contains('cite') && !next.classList.contains('anchor')) { ref = next.ref; next.remove(); }
-    else { const tag = tagOf(display.querySelector('annotation')?.textContent); if (tag) ref = {equation: tag, page: null}; }
+    else if (!whole) { const tag = tagOf(display.querySelector('annotation')?.textContent); if (tag) ref = {equation: tag, page: null}; }
     if (!ref) continue;
     const link = h('span', {className: 'eq-link', tabIndex: 0, title: 'Show this equation in the paper'});
     link.setAttribute('role', 'button'); link.ref = ref;
@@ -564,7 +607,7 @@ function renderBody(text, linkRefs) {
   }
   const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT, {acceptNode: n => n.parentElement.closest('.katex,code,pre,button,a,.eq-link') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT});
   const nodes = []; while (walker.nextNode()) nodes.push(walker.currentNode);
-  for (const node of nodes) {
+  for (const node of whole ? [] : nodes) {
     const found = findMentions(node.textContent); if (!found.length) continue;
     const frag = document.createDocumentFragment(); let at = 0;
     for (const {index, length, ref} of found) {
@@ -583,22 +626,30 @@ function addMessage(role, text, meta = {}, scroll = true) {
   $('#messages .chat-empty')?.remove();
   const article = h('article', {className: 'message ' + role + (scroll ? '' : ' instant')});
   const when = meta.at ? ' · ' + new Date(meta.at).toLocaleString([], {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'}) : '';
-  article.append(h('small', {textContent: (role === 'user' ? 'YOU' : 'MARGIN' + (meta.model ? ' · ' + meta.model : '')) + when}));
+  const extra = role === 'user' ? (meta.web ? ' · WEB SEARCH' : '') : meta.retrieval ? ` · ${meta.retrieval.passages} passages${meta.retrieval.mode === 'keywords' ? ' (keyword search)' : ''}` : '';
+  article.append(h('small', {textContent: (role === 'user' ? 'YOU' : 'MARGIN' + (meta.model ? ' · ' + meta.model : '')) + extra + when}));
   if (meta.image && /^data:image\/(png|jpeg);base64,/.test(meta.image)) article.append(h('img', {className: 'msg-image', src: meta.image, alt: 'Attached equation image'}));
-  const body = renderBody(text, role === 'assistant');
+  const whole = isProjectChat(chat);
+  const body = renderBody(text, role === 'assistant', whole);
   article.append(body);
   if (role === 'assistant') {
-    const quoteRefs = [...text.matchAll(QUOTE)].map(m => ({page: Number(m[1]), quote: m[2].replace(/\s+/g, ' ').trim()}));
-    const anchorRefs = [...text.matchAll(ANCHOR)].map(m => ({page: Number(m[1]), quote: m[2].replace(/\s+/g, ' ').trim(), anchor: true}));
     const seen = new Set(), uniq = r => { const k = JSON.stringify(r); if (seen.has(k)) return false; seen.add(k); return true; };
-    // Precise anchors first, so "follow chat" jumps to the exact passage.
-    const refs = [...anchorRefs, ...quoteRefs, ...parseReferences(text.replace(QUOTE, '').replace(ANCHOR, ''))].filter(uniq); article.refs = refs;
+    // Precise anchors first, so "follow chat" jumps to the exact passage. Project chats use only the
+    // structured tokens (they name the paper); paper chats also link plain "Eq. (61)" / "p. 4" mentions.
+    const refs = (whole ? structuredRefs(text) : [...structuredRefs(text.replace(TOKEN, '')), ...parseReferences(text.replace(QUOTE, '').replace(ANCHOR, ''))]).filter(uniq); article.refs = refs;
     if (refs.length) {
-      article.append(h('div', {className: 'citations'}, ...refs.map(ref => h('button', {textContent: refLabel(ref), onclick: () => navigate(ref)}))));
+      article.append(h('div', {className: 'citations'}, ...refs.map(ref => h('button', {textContent: refLabel(ref), title: ref.paper ? 'Open this paper at the citation' : 'Show in the paper', onclick: () => navigate(ref)}))));
       article.tabIndex = 0;
-      article.addEventListener('focus', () => navigate(refs[0]));
-      article.addEventListener('click', e => { if (!e.target.closest('button,a,.eq-link') && !getSelection().toString()) navigate(refs[0]); });
+      // Following (focus, click on the answer, scrolling) stays within the open paper.
+      const local = () => refs.find(isLocal);
+      // A press on a chip or link focuses the answer too; that focus must not jump to the first citation.
+      article.addEventListener('mousedown', e => { article.skipFocus = !!e.target.closest('button,a,.eq-link'); });
+      article.addEventListener('focus', () => { if (article.skipFocus) { article.skipFocus = false; return; } const r = local(); if (r) navigate(r, {switchPaper: false}); });
+      article.addEventListener('click', e => { const r = local(); if (r && !e.target.closest('button,a,.eq-link') && !getSelection().toString()) navigate(r, {switchPaper: false}); });
     }
+    if (meta.sources?.length) article.append(h('div', {className: 'sources'}, h('small', {textContent: 'WEB SOURCES'}),
+      h('ol', {}, ...meta.sources.map(src => { let host = ''; try { host = new URL(src.url).hostname.replace(/^www\./, ''); } catch {}
+        return h('li', {}, h('a', {href: src.url, target: '_blank', rel: 'noopener noreferrer', textContent: src.title || host || src.url}), host && src.title ? h('small', {textContent: ' · ' + host}) : ''); }))));
   }
   $('#messages').append(article);
   if (scroll) article.scrollIntoView({behavior: 'smooth', block: 'end'});
@@ -610,33 +661,38 @@ $('#messages').addEventListener('scroll', () => {
   scrollTimer = setTimeout(() => {
     if (!$('#follow').checked) return;
     const root = $('#messages').getBoundingClientRect();
-    const cards = [...document.querySelectorAll('.message')].filter(a => a.refs?.length).filter(a => { const r = a.getBoundingClientRect(); return r.bottom > root.top && r.top < root.bottom; });
+    const cards = [...document.querySelectorAll('.message')].filter(a => a.refs?.some(isLocal)).filter(a => { const r = a.getBoundingClientRect(); return r.bottom > root.top && r.top < root.bottom; });
     cards.sort((a, b) => Math.abs(a.getBoundingClientRect().top - root.top - 50) - Math.abs(b.getBoundingClientRect().top - root.top - 50));
-    if (cards[0] && activeRef !== cards[0].refs[0]) navigate(cards[0].refs[0]);
+    const first = cards[0]?.refs.find(isLocal);
+    if (first && activeRef !== first) navigate(first, {switchPaper: false});
   }, 180);
 });
 
 // ---------- asking ----------
 $('#ask').onsubmit = async e => {
   e.preventDefault();
-  const typed = $('#question').value.trim(), ctx = context;
-  if ((!typed && !ctx) || !doc || !chat || working || loading) return;
+  const typed = $('#question').value.trim(), ctx = context, whole = isProjectChat(chat);
+  if ((!typed && !ctx) || !chat || (!doc && !whole) || working || loading) return;
+  // In a project chat an attachment also names its paper, so the model can cite it.
+  const of = whole && paper ? ` of ${paperLabels(project.papers).get(paper.id) || paperTitle(paper)} (paper ${shortId(paper.id)})` : '';
   const question = !ctx ? typed : ctx.kind === 'passage'
-    ? `> ${ctx.text}\n>\n> — PDF page ${ctx.page}${ctx.image ? ' (image of the selected lines attached, for symbols the text drops)' : ''}\n\n${typed || 'Explain this passage.'}`
+    ? `> ${ctx.text}\n>\n> — PDF page ${ctx.page}${of}${ctx.image ? ' (image of the selected lines attached, for symbols the text drops)' : ''}\n\n${typed || 'Explain this passage.'}`
     : ctx.kind === 'region'
-      ? `**About a marked area on PDF page ${ctx.page}** (${ctx.where}; image attached)${ctx.text ? `\n\n> ${ctx.text}` : ''}\n\n${typed || 'Explain what is in this marked area.'}`
-      : `**About Eq. (${ctx.label}), PDF page ${ctx.page}** (image of the equation attached)\n\n${typed || 'Explain this equation: what each term means and how the paper uses it.'}`;
+      ? `**About a marked area on PDF page ${ctx.page}${of}** (${ctx.where}; image attached)${ctx.text ? `\n\n> ${ctx.text}` : ''}\n\n${typed || 'Explain what is in this marked area.'}`
+      : `**About Eq. (${ctx.label}), PDF page ${ctx.page}${of}** (image of the equation attached)\n\n${typed || 'Explain this equation: what each term means and how the paper uses it.'}`;
   const image = ctx?.image;
-  if (!pages.some(p => p.text.trim())) { notice('This PDF has no extractable text. Use OCR first.'); return; }
+  if (!whole && !pages.some(p => p.text.trim())) { notice('This PDF has no extractable text. Use OCR first.'); return; }
+  if (whole && !project.papers.length) { notice('Add papers to this project first.'); return; }
   if (!session?.configured) { notice('Add your OpenAI API key in Settings first.'); $('#open-settings').click(); return; }
   working = true; controls(); showStatus();
   const target = chat, projectId = project.id;
-  const pending = addMessage('user', question, {at: new Date().toISOString(), image}); $('#question').value = ''; setContext(null);
-  notice(`Reading the paper and asking ${session.model}…`);
+  const web = webSearch;
+  const pending = addMessage('user', question, {at: new Date().toISOString(), image, web}); $('#question').value = ''; setContext(null);
+  notice(whole ? `Searching the project's papers${web ? ' (and the web)' : ''} and asking ${session.model}… The first question in a project indexes its papers, which can take a minute.` : `Reading the paper${web ? ' (and searching the web)' : ''} and asking ${session.model}…`);
   const thinking = h('article', {className: 'message assistant thinking', ariaLabel: 'Margin is thinking'}, h('small', {textContent: 'MARGIN · ' + session.model}), h('div', {className: 'dots'}, h('span'), h('span'), h('span')));
   $('#messages').append(thinking); thinking.scrollIntoView({behavior: 'smooth', block: 'end'});
   try {
-    const r = await api(`/api/projects/${projectId}/chats/${target.id}/messages`, {body: {question, pages, ...(image ? {image} : {})}});
+    const r = await api(`/api/projects/${projectId}/chats/${target.id}/messages`, {body: {question, ...(whole ? {} : {pages}), ...(image ? {image} : {}), ...(web ? {web} : {})}});
     target.messages.push(...r.messages); target.title = r.chat.title;
     if (project?.id === projectId) { const summary = project.chats.find(c => c.id === r.chat.id); if (summary) Object.assign(summary, r.chat); project.chats.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)); }
     if (chat === target) {
@@ -645,7 +701,8 @@ $('#ask').onsubmit = async e => {
       const card = addMessage('assistant', r.messages[1].content, r.messages[1]);
       $('#chat-title').textContent = target.title;
       notice('Answer ready. Select a citation to inspect its source.');
-      if ($('#follow').checked && card.refs?.length) navigate(card.refs[0]);
+      const local = card.refs?.find(isLocal);
+      if ($('#follow').checked && local) navigate(local, {switchPaper: false});
     }
     renderLibrary();
   } catch (err) {
@@ -660,7 +717,29 @@ $('#question').onkeydown = e => {
   if (e.ctrlKey || e.metaKey || e.shiftKey) { e.target.setRangeText('\n', e.target.selectionStart, e.target.selectionEnd, 'end'); e.target.dispatchEvent(new Event('input')); return; }
   if (!e.altKey) $('#ask').requestSubmit();
 };
-$('#new-chat').onclick = newChat;
+// "New chat" asks what the chat is about: the open paper, or all papers of the project.
+function openChatMenu(btn) {
+  const menu = $('#new-chat-menu');
+  if (!menu.hidden && menu.anchor === btn) { closeChatMenu(); return; }
+  menu.anchor = btn;
+  const one = menu.querySelector('[data-scope="paper"]');
+  one.disabled = !paper;
+  one.querySelector('small').textContent = paper ? `Reads “${paperTitle(paper).slice(0, 40)}${paperTitle(paper).length > 40 ? '…' : ''}” in full` : 'Open a paper first';
+  menu.hidden = false; menu.style.animation = 'none'; void menu.offsetWidth; menu.style.animation = '';
+  const r = btn.getBoundingClientRect(), w = menu.offsetWidth;
+  menu.style.left = Math.max(8, r.left + w > innerWidth - 8 ? r.right - w : r.left) + 'px';
+  menu.style.top = r.bottom + 6 + 'px';
+  (paper ? one : menu.querySelector('[data-scope="project"]')).focus();
+}
+function closeChatMenu() { $('#new-chat-menu').hidden = true; }
+$('#new-chat-menu').onclick = e => { const b = e.target.closest('button[data-scope]'); if (!b || b.disabled) return; closeChatMenu(); newChat(b.dataset.scope); };
+document.addEventListener('mousedown', e => { if (!e.target.closest('#new-chat-menu,#new-chat,#new-chat-side')) closeChatMenu(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeChatMenu(); });
+$('#new-chat').onclick = e => openChatMenu(e.currentTarget);
+$('#web-toggle').onclick = e => {
+  webSearch = !webSearch; e.currentTarget.setAttribute('aria-pressed', webSearch);
+  notice(webSearch ? 'Web search on: answers may search the web and list their sources (billed per search).' : 'Web search off: answers use the papers only.');
+};
 $('#toggle-library').onclick = () => { const hidden = document.body.classList.toggle('no-library'); try { localStorage.setItem('margin-library-hidden', hidden ? '1' : ''); } catch {} };
 try { if (localStorage.getItem('margin-library-hidden')) document.body.classList.add('no-library'); } catch {}
 

@@ -33,8 +33,10 @@ test('papers are shared across projects and removed only when no project uses th
   const paper = await store.addPaper(pdf('x'), 'x.pdf');
   await store.addToProject(a.id, paper.id); await store.addToProject(b.id, paper.id);
   await store.newChat(a.id, paper.id);
+  const whole = await store.newChat(a.id, paper.id, 'project');
+  assert.equal(whole.paperId, null); assert.equal(whole.scope, 'project');
   await store.removeFromProject(a.id, paper.id);
-  assert.equal((await store.chatSummaries(a.id)).length, 0, 'chats about the paper go with it');
+  assert.deepEqual((await store.chatSummaries(a.id)).map(c => [c.id, c.scope]), [[whole.id, 'project']], 'chats about the paper go with it; project chats stay');
   assert.ok(await store.loadPaper(paper.id), 'still used by the second project');
   await store.deleteProject(b.id);
   assert.equal(await store.loadPaper(paper.id), null, 'orphaned paper is removed');
