@@ -57,7 +57,16 @@ function collect() {
   const isPdf = document.contentType === 'application/pdf';
   return {url: location.href, doi, title, candidates: isPdf ? [location.href] : c, isPdf};
 }
-chrome.runtime.onMessage.addListener((msg, _sender, reply) => { if (msg?.type === 'collect') reply(collect()); });
+chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
+  if (msg?.type === 'collect') reply(collect());
+  // Open a PDF link from inside the page, so the request carries this page as its referrer, the way a
+  // click on the site's own "View PDF" does (some publishers reject the link opened from outside).
+  if (msg?.type === 'open-from-page') {
+    const link = [...document.querySelectorAll('a[href]')].find(a => a.href === msg.url);
+    if (link) { link.removeAttribute('target'); link.click(); } else location.assign(msg.url);
+    reply({ok: true, via: link ? 'link' : 'location'});
+  }
+});
 chrome.runtime.sendMessage({type: 'page', info: collect()}).catch(() => {});
 // Some sites (IEEE, ScienceDirect) fill in links after load: report once more shortly after.
 setTimeout(() => chrome.runtime.sendMessage({type: 'page', info: collect()}).catch(() => {}), 2500);

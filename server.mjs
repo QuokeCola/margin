@@ -268,6 +268,8 @@ app.post('/api/fetch-requests', async (req, res) => {
   fetchRequests.set(r.id, r);
   res.json({id: r.id});
 });
+// Recent requests with the extension's notes (for diagnosing publishers that fail).
+app.get('/api/fetch-requests', (_, res) => { pruneRequests(); res.json([...fetchRequests.values()].map(r => ({id: r.id, doi: r.doi, title: r.title, status: r.status, created: new Date(r.created).toISOString(), attempts: r.attempts}))); });
 app.get('/api/fetch-requests/:rid', (req, res) => {
   const r = fetchRequests.get(req.params.rid);
   if (!r) return res.status(404).json({error: 'This request expired.'});

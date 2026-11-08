@@ -98,8 +98,11 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       const best = msg.info.candidates.find(u => /md5=|pid=/.test(u)) || msg.info.candidates[0];
       if (best && !state.navigated[req.id] && tabRequests.get(sender.tab.id) === req.id && !msg.info.isPdf) {
         state.navigated[req.id] = true; save();
-        note(req.id, {stage: 'navigate', url: best});
-        chrome.tabs.update(sender.tab.id, {url: best});
+        // Follow the link from inside the page (keeps the referrer); fall back to a plain navigation.
+        chrome.tabs.sendMessage(sender.tab.id, {type: 'open-from-page', url: best}, r => {
+          if (chrome.runtime.lastError || !r?.ok) chrome.tabs.update(sender.tab.id, {url: best});
+          note(req.id, {stage: 'navigate', url: best, via: r?.via || 'tab'});
+        });
       }
     })();
   }
