@@ -1,7 +1,7 @@
 {
   "name": "margin",
   "productName": "Margin",
-  "version": "2.2.1",
+  "version": "2.2.2",
   "description": "Read a paper beside an AI tutor whose citations jump to the exact page and equation.",
   "homepage": "https://github.com/QuokeCola/margin",
   "author": {
