@@ -41,11 +41,11 @@ export function tagOf(tex) {
 
 // Verbatim quotes from the paper: [[quote:7|exact words]] (page, then the words);
 // in project chats with the paper's id prefix: [[quote:3fa9c2d1:7|exact words]].
-export const QUOTE = /\[\[quote:(?:([0-9a-f]{6,64}):)?(\d+)\|([^\]]{3,800}?)\]\]/gi;
+export const QUOTE = /\[\[quote:(?:([0-9a-f]{6,64}):)?(\d+)\|((?:[^\]]|\](?!\])|\](?=\]\])){3,800}?)\]\](?!\])/gi;
 
 // Anchored citations: [[cite:7|a few exact words]] point at the supporting passage on a page;
 // [[cite:3fa9c2d1:7|a few exact words]] at a passage of a given paper of the project.
-export const ANCHOR = /\[\[cite:(?:([0-9a-f]{6,64}):)?(\d+)\|([^\]]{3,400}?)\]\]/gi;
+export const ANCHOR = /\[\[cite:(?:([0-9a-f]{6,64}):)?(\d+)\|((?:[^\]]|\](?!\])|\](?=\]\])){3,400}?)\]\](?!\])/gi;
 // The reference a QUOTE or ANCHOR match points at.
 export const quoteRef = (paper, page, words, anchor = false) => withPaper({page: Number(page), quote: words.replace(/\s+/g, ' ').trim(), ...(anchor ? {anchor: true} : {})}, paper);
 

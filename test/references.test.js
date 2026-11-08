@@ -39,3 +39,10 @@ test('cross-paper anchors carry the paper id; the old forms still parse', () => 
   assert.equal([...'[[cite:abc:4|some words here]] [[cite:Kingma 2015:4|some words here]]'.matchAll(ANCHOR)].length, 0);
   assert.deepEqual(quoteRef(undefined, '3', ' a  b\nc '), {page: 3, quote: 'a b c'});
 });
+
+test('quote and cite anchors may contain the paper\'s own [n] citation markers', async () => {
+  const {QUOTE, ANCHOR} = await import('../src/references.js');
+  const t = 'a [[quote:6aa729c7:2|caused by a collision [24], [25].]] b [[cite:3|see [12] here]] c [[quote:4|ends with [7]]] d';
+  assert.deepEqual([...t.matchAll(QUOTE)].map(m => m[3]), ['caused by a collision [24], [25].', 'ends with [7]']);
+  assert.deepEqual([...t.matchAll(ANCHOR)].map(m => m[3]), ['see [12] here']);
+});
