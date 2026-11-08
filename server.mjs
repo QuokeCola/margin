@@ -309,7 +309,7 @@ app.get('/api/fetch-requests/:rid', (req, res) => {
 });
 app.delete('/api/fetch-requests/:rid', (req, res) => { fetchRequests.delete(req.params.rid); res.sendStatus(204); });
 // The unpacked extension folder (inside the desktop app it is shipped outside the asar archive).
-const EXT_DIR = join(root, 'extension').replace(/app\.asar([\\/])/, 'app.asar.unpacked$1');
+const EXT_DIR = process.env.MARGIN_EXT_DIR || join(root, 'extension').replace(/app\.asar([\\/])/, 'app.asar.unpacked$1');
 app.get('/api/extension', (_, res) => res.json({paired: !!process.env.MARGIN_EXT_TOKEN, lastSeen: extLastSeen, folder: EXT_DIR}));
 // Pairing code for the extension (created once; "new" replaces it, unpairing old installs).
 app.post('/api/extension/pairing', async (req, res) => {

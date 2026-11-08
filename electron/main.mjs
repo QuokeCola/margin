@@ -1,7 +1,7 @@
 // Desktop shell: runs Margin's local server in a utility process (so heavy server work never stalls the
 // window) and shows it in a window.
 import {app, BrowserWindow, shell, ipcMain, session, utilityProcess, dialog, nativeTheme} from 'electron';
-import {readFile, rm} from 'node:fs/promises';
+import {readFile, rm, readdir, mkdir, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {randomBytes} from 'node:crypto';
 import {createServer} from 'node:net';
@@ -54,6 +54,12 @@ app.whenReady().then(async () => {
   env.MARGIN_ENV_FILE ??= join(app.getPath('userData'), 'settings.env');
   // On Linux keep the shared XDG library (~/.local/share/margin); elsewhere use the app folder.
   if (process.platform !== 'linux') env.MARGIN_DATA_DIR ??= join(app.getPath('userData'), 'library');
+  // Chrome loads the extension from a folder on disk. The installed app's own copy moves with the install (and
+  // an AppImage is mounted at a new temporary path on every launch), so keep a copy at a fixed place.
+  if (app.isPackaged && !env.MARGIN_EXT_DIR) {
+    try { env.MARGIN_EXT_DIR = await syncExtension(join(root, 'extension').replace(/app\.asar([\\/])/, 'app.asar.unpacked$1'), join(app.getPath('userData'), 'extension')); }
+    catch (e) { console.error('Could not copy the browser extension:', e.message); }
+  }
   const started = startServer(env);
   const origin = `http://127.0.0.1:${port}`;
 
@@ -140,3 +146,15 @@ ipcMain.handle('margin:fetch-with-login', async (event, url, title) => {
     win.loadURL(url).catch(() => {});
   });
 });
+
+// Copy the extension's files (flat folder) to `to`, writing only files whose contents changed.
+async function syncExtension(from, to) {
+  await mkdir(to, {recursive: true});
+  for (const e of await readdir(from, {withFileTypes: true})) {
+    if (!e.isFile()) continue;
+    const data = await readFile(join(from, e.name));
+    const old = await readFile(join(to, e.name)).catch(() => null);
+    if (!old || !old.equals(data)) await writeFile(join(to, e.name), data);
+  }
+  return to;
+}
