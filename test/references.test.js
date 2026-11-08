@@ -17,3 +17,8 @@ test('equation tags and tokens', () => {
   assert.equal(tagOf('\\dot r = K(p - \\hat p) \\tag{24}'), '24'); assert.equal(tagOf('x^2'), null);
   assert.deepEqual([...'a [[eq:6b|p:3]] b [[p:9]]'.matchAll(TOKEN)].map(m => tokenRef(m[1], m[2], m[3])), [{equation: '6b', page: 3}, {equation: null, page: 9}]);
 });
+import {QUOTE} from '../src/references.js';
+test('quote tokens', () => {
+  const m = [...'As stated, [[quote:7|the residual r is a filtered version of tau_ext]] holds.'.matchAll(QUOTE)];
+  assert.equal(m.length, 1); assert.equal(m[0][1], '7'); assert.equal(m[0][2], 'the residual r is a filtered version of tau_ext');
+});

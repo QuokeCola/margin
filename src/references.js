@@ -36,3 +36,6 @@ export function findMentions(text) {
 export function tagOf(tex) {
   return tex?.match(/\\tag\*?\{\s*\(?(\d+[a-z]?)\)?\s*\}/)?.[1] ?? null;
 }
+
+// Verbatim quotes from the paper: [[quote:7|exact words]] (page, then the words).
+export const QUOTE = /\[\[quote:(\d+)\|([^\]]{3,800}?)\]\]/gi;

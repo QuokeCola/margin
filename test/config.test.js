@@ -23,3 +23,7 @@ test('zoom limits', () => {
   assert(wheelZoomFactor(-5) > 1 && wheelZoomFactor(5) < 1);
   assert.equal(wheelZoomFactor(1000), wheelZoomFactor(20));
 });
+test('chat titles use the question, not the attachment header', () => {
+  assert.equal(chatTitle('**About Eq. (9), PDF page 3** (image of the equation attached)\n\nWhat does C_c select?'), 'Eq. (9): What does Cc select?');
+  assert.equal(chatTitle('> some passage\n>\n> — PDF page 7\n\nWhy is this true?'), 'Passage: Why is this true?');
+});

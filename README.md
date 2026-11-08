@@ -35,7 +35,8 @@ npm start
    Each paper can have any number of chats. **+ New chat** starts one; click a chat to switch, double-click a paper or chat to rename it, and use × to delete. Chats are saved after every answer, with the model and time of each reply. ☰ hides the library.
 2. Ask a question; Enter sends it, and Ctrl+Enter (or Shift+Enter) adds a line break. Chat is connected to the API model, not the original ChatGPT chat or its memory. A short topic summary from that chat is included in the tutor instructions, not its full transcript.
 3. Citations are clickable where they appear: inline chips such as `Eq. (46) · p. 7`, plain mentions such as “Eq. (61)” or “p. 4” (dotted underline), and equations reproduced from the paper (outlined on the left, with a badge); click one to jump to its source. The chips are repeated at the bottom of each answer. Click an answer or a citation chip to navigate. With **Follow chat** enabled, scrolling to an older answer moves the PDF to its first reference. If an answer has several citations, select a specific chip. Turn following off to explore the PDF independently; explicit citation clicks still work.
-4. Page citations outline the page. Equation citations highlight a horizontal band near the detected label. Missing equation coordinates fall back to a cited page; ambiguous locations without a page require correction.
+4. Page citations outline the page. Equation citations draw a frame around the detected equation (its number plus the neighbouring lines that look like math, within the column). Quotes in answers (`[[quote:7|exact words]]`, shown in italics) highlight those exact words in the PDF; matching ignores spacing, hyphenation and punctuation, and falls back to the cited page.
+   **Ask about the PDF:** select text on a page and click **Ask AI about this ↗** to attach the passage to your next question; or hover an equation (dashed outline) and click it, then **Ask AI about Eq. (n) ↗** to attach a cropped image of it (the model reads the image, because extracted text garbles math). Press Enter with an empty box to have the passage or equation explained. Equation detection only accepts numbers like “(12)” at the right edge of a column. Manual corrections use a horizontal band. Missing equation coordinates fall back to a cited page; ambiguous locations without a page require correction.
 5. In **Find a reference / correct an equation location**, enter an equation number and click **Find equation**. To correct it, enter the actual PDF page and position from the top, or click the page with this panel open, then **Save correction**. **Remove correction** returns to automatic detection.
 6. **Zoom**: pinch the trackpad (or Ctrl + scroll) over the PDF to zoom around the cursor, or use − / % / +. Range 50–300%; the zoom level is remembered.
 
@@ -68,6 +69,7 @@ npm run build
 - `server.mjs`: loopback server, settings (`.env`), model list, paper/chat library storage, OpenAI Responses request.
 - `lib/config.mjs`: `.env` updating, model filter, validation helpers.
 - `src/zoom.js`: zoom limits and pinch/scroll step size.
+- `src/layout.js`: equation-number filter, equation frames and quote matching from pdf.js text-item geometry.
 - `src/main.js`: PDF extraction/rendering, chat, citations, synchronization, manual corrections.
 - `src/references.js`: reference parsing and resolution.
 - `test/references.test.js`: structured/natural references, ranges, override precedence, ambiguity, invalid pages.

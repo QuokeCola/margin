@@ -5,7 +5,8 @@ import DOMPurify from 'dompurify';
 import renderMath from 'katex/contrib/auto-render';
 import 'katex/dist/katex.min.css';
 import './style.css';
-import {parseReferences, resolveReference, TOKEN, tokenRef, findMentions, tagOf} from './references.js';
+import {parseReferences, resolveReference, TOKEN, tokenRef, findMentions, tagOf, QUOTE} from './references.js';
+import {equationBox, findQuote, isEquationLabel} from './layout.js';
 import {clampZoom, wheelZoomFactor} from './zoom.js';
 pdfjs.GlobalWorkerOptions.workerSrc = worker;
 const $ = s => document.querySelector(s);
@@ -14,8 +15,9 @@ const h = (tag, props = {}, ...kids) => { const el = Object.assign(document.crea
 $('#app').innerHTML = `<header><button id="toggle-library" class="icon" title="Show or hide the library" aria-label="Toggle library">☰</button><a class="brand" href="/">m<span>Margin</span></a><span class="subtitle">A little closer to the paper.</span>
 <div class="header-tools"><label class="model-picker" title="Model used for new answers">Model <select id="model" disabled><option>…</option></select></label><span id="connection">Connecting…</span><button id="open-settings">Settings</button></div></header>
 <main><aside class="library"><div class="section-head"><div><small>LIBRARY</small><h2>Papers &amp; chats</h2></div><label class="file-button">+ Add PDF<input id="file" type="file" accept="application/pdf"></label></div><ul id="papers" aria-label="Papers"></ul></aside>
-<section class="chat"><div class="section-head"><div><small id="chat-paper">YOUR STUDY DESK</small><h1 id="chat-title">Read. Question. Understand.</h1></div><button id="new-chat" disabled>New chat</button></div><div id="messages" tabindex="0" aria-label="Conversation"></div><form id="ask"><textarea id="question" aria-label="Question about the paper" placeholder="What would you like to understand?" rows="3" maxlength="8000"></textarea><div class="compose-bottom"><span>Enter to send · Ctrl+Enter for a new line. Paper text + this chat are sent to OpenAI.</span><button id="send" type="submit">Ask ↗</button></div></form><p id="notice" role="status">Add a PDF, or pick one from the library.</p></section>
+<section class="chat"><div class="section-head"><div><small id="chat-paper">YOUR STUDY DESK</small><h1 id="chat-title">Read. Question. Understand.</h1></div><button id="new-chat" disabled>New chat</button></div><div id="messages" tabindex="0" aria-label="Conversation"></div><form id="ask"><div id="context" hidden></div><textarea id="question" aria-label="Question about the paper" placeholder="What would you like to understand?" rows="3" maxlength="8000"></textarea><div class="compose-bottom"><span>Enter to send · Ctrl+Enter for a new line. Paper text + this chat are sent to OpenAI.</span><button id="send" type="submit">Ask ↗</button></div></form><p id="notice" role="status">Add a PDF, or pick one from the library.</p></section>
 <section class="reader"><div class="section-head"><div><small>SOURCE DOCUMENT</small><h2 id="filename">Your paper, in context</h2></div></div><div class="toolbar"><label><input id="follow" type="checkbox" checked> Follow chat</label><div><label>Page <input id="page" type="number" min="1" value="1"></label><span id="total">/ —</span><button id="go">Go</button></div><div class="zoom" title="Pinch the trackpad (or Ctrl + scroll) over the page to zoom"><button id="zoom-out" aria-label="Zoom out">−</button><button id="zoom-reset" title="Reset to 100%">100%</button><button id="zoom-in" aria-label="Zoom in">+</button></div></div><div id="pdf"><div class="empty"><div class="paper-icon">∑</div><h2>Make room for the original.</h2><p>Add a PDF from your laptop, or pick a paper from the library.<br>Pinch the trackpad over a page to zoom.</p></div></div><details id="manual"><summary>Find a reference / correct an equation location</summary><div class="manual-grid"><label>Equation <input id="equation" placeholder="61"></label><label>PDF page <input id="map-page" type="number" min="1" value="1"></label><label>Position from top (%) <input id="map-y" type="number" min="0" max="100" value="50"></label><button id="find">Find equation</button><button id="save">Save correction</button><button id="remove">Remove correction</button></div><p>Corrections are saved with this paper in your library. Click the PDF while this panel is open to pick a position. Pages use PDF order, not printed journal numbers.</p></details></section></main>
+<div id="pdf-pop" hidden><button type="button" id="pop-ask">Ask AI ↗</button></div>
 <dialog id="settings"><form id="settings-form"><h2>Settings</h2>
 <label>OpenAI API key<input id="key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-…"></label><p id="key-hint" class="hint"></p>
 <label>Model<select id="settings-model"></select></label><label>…or type a model ID<input id="custom-model" autocomplete="off" spellcheck="false" placeholder="e.g. gpt-5.2"></label>
@@ -24,6 +26,7 @@ $('#app').innerHTML = `<header><button id="toggle-library" class="icon" title="S
 
 let session = null, models = [], papers = [], paper = null, chat = null;
 let doc = null, pages = [], index = {}, overrides = {};
+let pageBoxes = {}, eqByPage = {}, context = null; // text-item geometry and detected equations per page; pending attachment
 let working = false, loading = false, generation = 0, activeRef = null, renderQueue = Promise.resolve();
 let zoom = 1;
 try { zoom = clampZoom(Number(localStorage.getItem('margin-zoom')) || 1); } catch {}
@@ -176,7 +179,7 @@ async function closePaper() {
   generation++;
   await renderQueue.catch(() => {});
   await destroyDoc();
-  doc = null; paper = null; chat = null; pages = []; index = {}; overrides = {}; activeRef = null;
+  doc = null; paper = null; chat = null; pages = []; index = {}; overrides = {}; activeRef = null; pageBoxes = {}; eqByPage = {}; setContext(null); hidePop();
   $('#pdf').replaceChildren(h('div', {className: 'empty', innerHTML: '<div class="paper-icon">∑</div><h2>Make room for the original.</h2><p>Add a PDF from your laptop, or pick a paper from the library.</p>'}));
   $('#filename').textContent = 'Your paper, in context'; $('#total').textContent = '/ —';
   showWelcome(); controls();
@@ -223,29 +226,36 @@ async function openPaper(id, bytes) {
       const page = await doc.getPage(n), vp = page.getViewport({scale: 1}), content = await page.getTextContent();
       const items = content.items.filter(t => typeof t.str === 'string');
       pages.push({page: n, text: items.map(t => t.str + (t.hasEOL ? '\n' : ' ')).join('')});
-      // Isolated parenthesized numeric labels are candidates, not guaranteed equations.
-      for (let i = 0; i < items.length; i++) {
-        const t = items[i]; let label = t.str.trim(); if (label === '(') label = items.slice(i, i + 3).map(v => v.str).join('');
+      // Text-item boxes in page pixels (scale 1, top-left origin), used for equation frames and quotes.
+      const boxes = items.filter(t => t.str.length).map(t => { const m = pdfjs.Util.transform(vp.transform, t.transform), fh = Math.hypot(m[2], m[3]); return {s: t.str, x0: m[4], x1: m[4] + t.width, y0: m[5] - fh * 0.82, y1: m[5] + fh * 0.22}; });
+      pageBoxes[n] = boxes;
+      // Equation numbers like "(12)" at the right edge of a column ("(", "12", ")" split items are joined).
+      for (let i = 0; i < boxes.length; i++) {
+        let b = boxes[i], label = b.s.trim();
+        if (label === '(' && boxes[i + 2]) { const g = boxes.slice(i, i + 3); label = g.map(v => v.s).join('').trim(); b = {s: label, x0: g[0].x0, x1: g[2].x1, y0: Math.min(...g.map(v => v.y0)), y1: Math.max(...g.map(v => v.y1))}; }
         const match = label.match(/^\(\s*(\d+[a-z]?)\s*\)$/i);
-        if (match) { const [, y] = vp.convertToViewportPoint(t.transform[4], t.transform[5]); (index[match[1]] ??= []).push({page: n, y: y / vp.height, x: t.transform[4] / vp.width}); }
+        if (!match || !isEquationLabel(boxes, b, vp.width)) continue;
+        const box = equationBox(boxes, b, vp.width, vp.height);
+        const entry = {page: n, y: box.y0, x: b.x0 / vp.width, box, label: match[1]};
+        (index[match[1]] ??= []).push(entry); (eqByPage[n] ??= []).push(entry);
       }
       const el = h('div', {className: 'pdf-page'}, h('span', {className: 'page-badge', textContent: n}));
       el.dataset.page = n; el.dataset.width = vp.width; el.dataset.height = vp.height; sizePage(el);
       $('#pdf').append(el); pageObserver.observe(el);
     }
     if (meta.chats.length) await selectChat(meta.chats[0].id); else { loading = false; await newChat(); }
-    notice(`Ready · ${pages.length} pages · ${Object.keys(index).length} equation-label candidates. ${pages.every(p => !p.text.trim()) ? 'No text detected: OCR this PDF before asking questions.' : ''}`);
+    notice(`Ready · ${pages.length} pages · ${Object.keys(index).length} detected equations. ${pages.every(p => !p.text.trim()) ? 'No text detected: OCR this PDF before asking questions.' : ''}`);
     refreshLibrary();
   } catch (err) { await destroyDoc(); notice('Could not open PDF: ' + err.message); }
   finally { loading = false; controls(); renderLibrary(); }
 }
 
 // ---------- rendering & zoom ----------
-function sizePage(el) { el.style.width = Number(el.dataset.width) * zoom + 'px'; el.style.height = Number(el.dataset.height) * zoom + 'px'; }
+function sizePage(el) { el.style.width = Number(el.dataset.width) * zoom + 'px'; el.style.height = Number(el.dataset.height) * zoom + 'px'; el.style.setProperty('--total-scale-factor', zoom); }
 const MAX_CANVAS_PIXELS = 12e6; // keeps a single page bitmap under ~48 MB at high zoom
 const pageObserver = new IntersectionObserver(entries => entries.forEach(e => {
   if (e.isIntersecting) queueRender(e.target);
-  else { e.target.querySelector('canvas')?.remove(); delete e.target.dataset.rendered; } // free far-away pages
+  else { e.target.querySelector('canvas')?.remove(); e.target.querySelector('.textLayer')?.remove(); delete e.target.dataset.rendered; } // free far-away pages
 }), {root: $('#pdf'), rootMargin: '800px'});
 function queueRender(el) {
   const gen = generation;
@@ -259,6 +269,13 @@ function queueRender(el) {
     if (gen !== generation) return;
     const old = el.querySelector('canvas'); if (!old) canvas.className = 'fade-in';
     old?.remove(); el.prepend(canvas); el.dataset.rendered = z;
+    if (!el.querySelector('.textLayer')) {
+      const layer = h('div', {className: 'textLayer'}); canvas.after(layer);
+      // endOfContent + .selecting (as in pdf.js's viewer) stop a drag through gaps from selecting the rest of the page.
+      layer.addEventListener('mousedown', () => layer.classList.add('selecting'));
+      new pdfjs.TextLayer({textContentSource: page.streamTextContent({includeMarkedContent: true, disableNormalization: true}), container: layer, viewport: base}).render()
+        .then(() => layer.append(h('div', {className: 'endOfContent'}))).catch(() => layer.remove());
+    }
   }).catch(() => notice('A PDF page could not render. Reopen the paper to retry.'));
   return renderQueue;
 }
@@ -294,21 +311,43 @@ $('#zoom-reset').textContent = Math.round(zoom * 100) + '%';
 // ---------- citations ----------
 async function navigate(ref) {
   if (!doc) return;
+  if (ref.quote) return navigateQuote(ref);
   const target = resolveReference(ref, index, overrides, doc.numPages);
   if (!target) { notice('Equation location is missing or ambiguous. Use the correction panel to choose its page and position.'); $('#manual').open = true; $('#equation').value = ref.equation || ''; return; }
   activeRef = ref;
   const el = $(`.pdf-page[data-page="${target.page}"]`);
   await queueRender(el);
-  document.querySelectorAll('.highlight').forEach(x => x.remove());
-  const mark = h('div', {className: 'highlight' + (target.y == null ? ' whole' : ''), title: target.manual ? 'Manually corrected location' : target.y == null ? 'Page citation' : 'Detected equation label; verify against source'});
-  mark.style.top = target.y == null ? '0' : Math.max(0, target.y * 100 - 3) + '%';
-  el.append(mark);
-  $('#pdf').scrollTo({top: el.offsetTop + (target.y ?? 0) * el.clientHeight - 100, behavior: 'smooth'});
-  $('#page').value = target.page;
-  notice(`${ref.equation ? 'Equation ' + ref.equation + ' · ' : ''}PDF page ${target.page}${target.manual ? ' · manual correction' : target.fallback ? ' · exact equation not located; showing page' : target.y != null ? ' · detected label (verify visually)' : ''}`);
+  const box = target.manual ? null : target.box;
+  const mark = h('div', {className: 'highlight' + (box ? ' eq' : target.y == null ? ' whole' : ''), title: target.manual ? 'Manually corrected location' : target.y == null ? 'Page citation' : 'Detected equation; verify against source'});
+  if (box) placeBox(mark, box); else mark.style.top = target.y == null ? '0' : Math.max(0, target.y * 100 - 3) + '%';
+  showMarks(el, [mark], box?.y0 ?? target.y ?? 0, target.page);
+  notice(`${ref.equation ? 'Equation ' + ref.equation + ' · ' : ''}PDF page ${target.page}${target.manual ? ' · manual correction' : target.fallback ? ' · exact equation not located; showing page' : box ? ' · detected equation (verify visually)' : ''}`);
+}
+function placeBox(div, b) { Object.assign(div.style, {left: b.x0 * 100 + '%', top: b.y0 * 100 + '%', width: (b.x1 - b.x0) * 100 + '%', height: (b.y1 - b.y0) * 100 + '%'}); }
+function showMarks(el, marks, y, page) {
+  document.querySelectorAll('.pdf-page .highlight').forEach(x => x.remove());
+  el.append(...marks);
+  $('#pdf').scrollTo({top: el.offsetTop + y * el.clientHeight - 100, behavior: 'smooth'});
+  $('#page').value = page;
+}
+// Highlight the quoted words; search the cited page first, then the rest of the paper.
+async function navigateQuote(ref) {
+  const order = [ref.page, ...Object.keys(pageBoxes).map(Number).filter(n => n !== ref.page)].filter(n => pageBoxes[n]);
+  for (const n of order) {
+    const el = $(`.pdf-page[data-page="${n}"]`);
+    const rects = findQuote(pageBoxes[n], ref.quote, Number(el.dataset.width), Number(el.dataset.height));
+    if (!rects) continue;
+    activeRef = ref;
+    await queueRender(el);
+    showMarks(el, rects.map(r => { const d = h('div', {className: 'highlight text', title: 'Quoted text'}); placeBox(d, r); return d; }), rects[0].y0, n);
+    notice(`Quoted text · PDF page ${n}${n !== ref.page ? ` (cited as page ${ref.page})` : ''}`);
+    return;
+  }
+  await navigate({page: ref.page});
+  notice(`The quoted words were not found in the extracted text; showing PDF page ${ref.page}.`);
 }
 
-const refLabel = ref => ref.equation ? `Eq. (${ref.equation})${ref.page ? ' · p. ' + ref.page : ''}` : `Page ${ref.page}`;
+const refLabel = ref => ref.quote ? `“${ref.quote.split(/\s+/).slice(0, 5).join(' ')}…” · p. ${ref.page}` : ref.equation ? `Eq. (${ref.equation})${ref.page ? ' · p. ' + ref.page : ''}` : `Page ${ref.page}`;
 const MATH = /\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\$\$[\s\S]*?\$\$/g;
 
 // Markdown + KaTeX, with citations made clickable where they appear:
@@ -316,14 +355,16 @@ const MATH = /\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\$\$[\s\S]*?\$\$/g;
 // equation makes the whole equation a link, and plain "Eq. (61)" / "p. 4" text is linked.
 function renderBody(text, linkRefs) {
   const body = h('div', {className: 'message-body'});
-  const math = [], cites = [];
-  let t = text.replace(MATH, m => { math.push(m); return `MATHPH${math.length - 1}END`; });
+  const math = [], cites = [], quotes = [];
+  let t = linkRefs ? text.replace(QUOTE, (_, p, q) => { quotes.push({page: Number(p), quote: q.replace(/\s+/g, ' ').trim()}); return `QUOTEPH${quotes.length - 1}END`; }) : text;
+  t = t.replace(MATH, m => { math.push(m); return `MATHPH${math.length - 1}END`; });
   if (linkRefs) t = t.replace(TOKEN, (_, eq, p1, p2) => { cites.push(tokenRef(eq, p1, p2)); return `CITEPH${cites.length - 1}END`; });
   body.innerHTML = DOMPurify.sanitize(marked.parse(t));
   body.querySelectorAll('img').forEach(img => img.remove());
   body.querySelectorAll('a').forEach(a => { a.rel = 'noopener noreferrer'; a.target = '_blank'; });
   const escape = s => { const span = document.createElement('span'); span.textContent = s; return span.innerHTML; };
-  body.innerHTML = body.innerHTML.replace(/MATHPH(\d+)END/g, (_, i) => escape(math[Number(i)])).replace(/CITEPH(\d+)END/g, (_, i) => `<button type="button" class="cite" data-i="${i}"></button>`);
+  body.innerHTML = body.innerHTML.replace(/MATHPH(\d+)END/g, (_, i) => escape(math[Number(i)])).replace(/CITEPH(\d+)END/g, (_, i) => `<button type="button" class="cite" data-i="${i}"></button>`).replace(/QUOTEPH(\d+)END/g, (_, i) => `<button type="button" class="quote-link" data-q="${i}"></button>`);
+  body.querySelectorAll('button.quote-link').forEach(b => { b.ref = quotes[Number(b.dataset.q)]; b.append(h('span', {textContent: `“${b.ref.quote}”`}), h('small', {textContent: ` p. ${b.ref.page} ↗`})); b.title = 'Highlight this passage in the paper'; });
   body.querySelectorAll('button.cite').forEach(b => { b.ref = cites[Number(b.dataset.i)]; b.textContent = refLabel(b.ref); b.title = 'Show in the paper'; });
   renderMath(body, {delimiters: [{left: '$$', right: '$$', display: true}, {left: '\\[', right: '\\]', display: true}, {left: '\\(', right: '\\)', display: false}], throwOnError: false});
   if (!linkRefs) return body;
@@ -353,7 +394,7 @@ function renderBody(text, linkRefs) {
     }
     frag.append(node.textContent.slice(at)); node.replaceWith(frag);
   }
-  body.addEventListener('click', e => { const el = e.target.closest('.cite,.ref-link,.eq-link'); if (el?.ref) { e.stopPropagation(); navigate(el.ref); } });
+  body.addEventListener('click', e => { const el = e.target.closest('.cite,.ref-link,.eq-link,.quote-link'); if (el?.ref) { e.stopPropagation(); navigate(el.ref); } });
   body.addEventListener('keydown', e => { if ((e.key === 'Enter' || e.key === ' ') && e.target.classList.contains('eq-link')) { e.preventDefault(); navigate(e.target.ref); } });
   return body;
 }
@@ -363,15 +404,17 @@ function addMessage(role, text, meta = {}, scroll = true) {
   const article = h('article', {className: 'message ' + role + (scroll ? '' : ' instant')});
   const when = meta.at ? ' · ' + new Date(meta.at).toLocaleString([], {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'}) : '';
   article.append(h('small', {textContent: (role === 'user' ? 'YOU' : 'MARGIN' + (meta.model ? ' · ' + meta.model : '')) + when}));
+  if (meta.image && /^data:image\/(png|jpeg);base64,/.test(meta.image)) article.append(h('img', {className: 'msg-image', src: meta.image, alt: 'Attached equation image'}));
   const body = renderBody(text, role === 'assistant');
   article.append(body);
   if (role === 'assistant') {
-    const refs = parseReferences(text); article.refs = refs;
+    const quoteRefs = [...text.matchAll(QUOTE)].map(m => ({page: Number(m[1]), quote: m[2].replace(/\s+/g, ' ').trim()}));
+    const refs = [...parseReferences(text.replace(QUOTE, '')), ...quoteRefs]; article.refs = refs;
     if (refs.length) {
       article.append(h('div', {className: 'citations'}, ...refs.map(ref => h('button', {textContent: refLabel(ref), onclick: () => navigate(ref)}))));
       article.tabIndex = 0;
       article.addEventListener('focus', () => navigate(refs[0]));
-      article.addEventListener('click', e => { if (!e.target.closest('button,a,.eq-link')) navigate(refs[0]); });
+      article.addEventListener('click', e => { if (!e.target.closest('button,a,.eq-link') && !getSelection().toString()) navigate(refs[0]); });
     }
   }
   $('#messages').append(article);
@@ -393,18 +436,22 @@ $('#messages').addEventListener('scroll', () => {
 // ---------- asking ----------
 $('#ask').onsubmit = async e => {
   e.preventDefault();
-  const question = $('#question').value.trim();
-  if (!question || !doc || !chat || working || loading) return;
+  const typed = $('#question').value.trim(), ctx = context;
+  if ((!typed && !ctx) || !doc || !chat || working || loading) return;
+  const question = !ctx ? typed : ctx.kind === 'passage'
+    ? `> ${ctx.text}\n>\n> — PDF page ${ctx.page}\n\n${typed || 'Explain this passage.'}`
+    : `**About Eq. (${ctx.label}), PDF page ${ctx.page}** (image of the equation attached)\n\n${typed || 'Explain this equation: what each term means and how the paper uses it.'}`;
+  const image = ctx?.image;
   if (!pages.some(p => p.text.trim())) { notice('This PDF has no extractable text. Use OCR first.'); return; }
   if (!session?.configured) { notice('Add your OpenAI API key in Settings first.'); $('#open-settings').click(); return; }
   working = true; controls(); showStatus();
   const target = chat, paperId = paper.id;
-  const pending = addMessage('user', question, {at: new Date().toISOString()}); $('#question').value = '';
+  const pending = addMessage('user', question, {at: new Date().toISOString(), image}); $('#question').value = ''; setContext(null);
   notice(`Reading the paper and asking ${session.model}…`);
   const thinking = h('article', {className: 'message assistant thinking', ariaLabel: 'Margin is thinking'}, h('small', {textContent: 'MARGIN · ' + session.model}), h('div', {className: 'dots'}, h('span'), h('span'), h('span')));
   $('#messages').append(thinking); thinking.scrollIntoView({behavior: 'smooth', block: 'end'});
   try {
-    const r = await api(`/api/papers/${paperId}/chats/${target.id}/messages`, {body: {question, pages}});
+    const r = await api(`/api/papers/${paperId}/chats/${target.id}/messages`, {body: {question, pages, ...(image ? {image} : {})}});
     target.messages.push(...r.messages); target.title = r.chat.title;
     const summary = paper?.chats.find(c => c.id === r.chat.id); if (summary) Object.assign(summary, r.chat);
     paper?.chats.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
@@ -419,7 +466,7 @@ $('#ask').onsubmit = async e => {
     renderLibrary(); refreshLibrary();
   } catch (err) {
     notice(err.message);
-    if (chat === target) { pending.remove(); $('#question').value = question; }
+    if (chat === target) { pending.remove(); $('#question').value = typed; setContext(ctx); }
   } finally { thinking.remove(); working = false; controls(); showStatus(); }
 };
 // Enter sends; Ctrl+Enter (or Shift+Enter) inserts a line break. Ignore Enter while an IME is composing.
@@ -447,12 +494,87 @@ $('#save').onclick = async () => {
   if (await persist()) navigate({equation: eq});
 };
 $('#remove').onclick = async () => { if (!paper) return; delete overrides[$('#equation').value.trim()]; if (await persist()) notice('Correction removed. Automatic detection will be used.'); };
+// ---------- PDF interaction: corrections, text selection, equations ----------
+function pageHit(e) {
+  const el = e.target.closest?.('.pdf-page'); if (!el) return null;
+  const r = el.getBoundingClientRect(), u = (e.clientX - r.left) / r.width, v = (e.clientY - r.top) / r.height;
+  const eq = (eqByPage[el.dataset.page] || []).find(q => u >= q.box.x0 && u <= q.box.x1 && v >= q.box.y0 && v <= q.box.y1);
+  return {el, u, v, eq};
+}
+let popAction = null;
+function showPop(x, y, label, action) {
+  const pop = $('#pdf-pop'); $('#pop-ask').textContent = label; popAction = action;
+  pop.hidden = false;
+  const w = pop.offsetWidth, hgt = pop.offsetHeight;
+  pop.style.left = Math.min(innerWidth - w - 8, Math.max(8, x - w / 2)) + 'px';
+  pop.style.top = (y + hgt + 12 > innerHeight ? y - hgt - 12 : y + 10) + 'px';
+}
+function hidePop() { $('#pdf-pop').hidden = true; popAction = null; }
+$('#pop-ask').onclick = async () => { const a = popAction; hidePop(); await a?.(); $('#question').focus(); };
+$('#pdf').addEventListener('scroll', hidePop, {passive: true});
+document.addEventListener('mousedown', e => { if (!e.target.closest('#pdf-pop')) hidePop(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') hidePop(); });
+
+for (const ev of ['pointerup', 'blur']) (ev === 'blur' ? window : document).addEventListener(ev, () => document.querySelectorAll('.textLayer.selecting').forEach(l => l.classList.remove('selecting')));
+$('#pdf').addEventListener('mouseup', e => {
+  if ($('#manual').open || e.button !== 0) return;
+  setTimeout(() => {
+    const sel = getSelection(), text = sel.toString().replace(/\s+/g, ' ').trim();
+    const el = sel.anchorNode?.parentElement?.closest('.pdf-page');
+    if (sel.isCollapsed || text.length < 2 || !el) {
+      const hit = pageHit(e);
+      if (hit?.eq) showPop(e.clientX, e.clientY, `Ask AI about Eq. (${hit.eq.label}) ↗`, () => attachEquation(hit.eq));
+      return;
+    }
+    const r = sel.getRangeAt(0).getBoundingClientRect();
+    const page = Number(el.dataset.page);
+    showPop(r.left + r.width / 2, r.bottom, 'Ask AI about this ↗', () => { setContext({kind: 'passage', page, text: text.slice(0, 3000)}); sel.removeAllRanges(); });
+  }, 0);
+});
+// Outline an equation under the pointer so it reads as clickable.
+let hoverFrame = 0;
+$('#pdf').addEventListener('mousemove', e => {
+  if (hoverFrame) return;
+  hoverFrame = requestAnimationFrame(() => {
+    hoverFrame = 0;
+    const hit = $('#manual').open || e.buttons ? null : pageHit(e);
+    const old = document.querySelector('.eq-hover');
+    if (!hit?.eq) { old?.remove(); document.querySelectorAll('.eq-hot').forEach(x => x.classList.remove('eq-hot')); return; }
+    if (old?.eq === hit.eq) return;
+    old?.remove();
+    const d = h('div', {className: 'eq-hover', title: `Eq. (${hit.eq.label}) · click to ask about it`}); d.eq = hit.eq; placeBox(d, hit.eq.box);
+    hit.el.append(d); hit.el.classList.add('eq-hot');
+  });
+});
+$('#pdf').addEventListener('mouseleave', () => { document.querySelector('.eq-hover')?.remove(); });
 $('#pdf').onclick = e => {
   if (!$('#manual').open) return;
   const el = e.target.closest('.pdf-page'); if (!el) return;
   $('#map-page').value = el.dataset.page;
   $('#map-y').value = Math.round((e.clientY - el.getBoundingClientRect().top) / el.clientHeight * 100);
 };
+// Crop the equation from a fresh high-resolution render, since extracted text garbles math.
+async function attachEquation(eq) {
+  const page = await doc.getPage(eq.page), scale = 3, vp = page.getViewport({scale});
+  const full = h('canvas', {width: Math.floor(vp.width), height: Math.floor(vp.height)});
+  await page.render({canvasContext: full.getContext('2d'), viewport: vp}).promise;
+  const pad = 6, x = Math.max(0, eq.box.x0 * vp.width - pad), y = Math.max(0, eq.box.y0 * vp.height - pad);
+  const w = Math.min(vp.width - x, (eq.box.x1 - eq.box.x0) * vp.width + 2 * pad), hh = Math.min(vp.height - y, (eq.box.y1 - eq.box.y0) * vp.height + 2 * pad);
+  const k = Math.min(1, 1600 / w), out = h('canvas', {width: Math.round(w * k), height: Math.round(hh * k)}), c = out.getContext('2d');
+  c.fillStyle = '#fff'; c.fillRect(0, 0, out.width, out.height); c.drawImage(full, x, y, w, hh, 0, 0, out.width, out.height);
+  setContext({kind: 'equation', page: eq.page, label: eq.label, image: out.toDataURL('image/png')});
+}
+function setContext(c) {
+  context = c;
+  const box = $('#context'); box.hidden = !c; box.replaceChildren();
+  $('#question').placeholder = !c ? 'What would you like to understand?' : c.kind === 'passage' ? 'Ask about this passage… (or press Enter to have it explained)' : 'Ask about this equation… (or press Enter to have it explained)';
+  if (!c) return;
+  if (c.image) box.append(h('img', {src: c.image, alt: `Eq. (${c.label})`}));
+  box.append(h('div', {className: 'ctx-info'}, h('small', {textContent: c.kind === 'passage' ? `PASSAGE · PDF PAGE ${c.page}` : `EQ. (${c.label}) · PDF PAGE ${c.page}`}), ...(c.text ? [h('span', {textContent: `“${c.text.length > 220 ? c.text.slice(0, 220) + '…' : c.text}”`})] : [])),
+    h('button', {type: 'button', className: 'icon del', textContent: '×', title: 'Remove attachment', onclick: () => setContext(null)}));
+  controls();
+}
+
 
 // ---------- start ----------
 showWelcome(); controls();
