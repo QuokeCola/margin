@@ -5,7 +5,7 @@ import DOMPurify from 'dompurify';
 import renderMath from 'katex/contrib/auto-render';
 import 'katex/dist/katex.min.css';
 import './style.css';
-import {parseReferences, resolveReference, TOKEN, tokenRef, findMentions, tagOf, QUOTE} from './references.js';
+import {parseReferences, resolveReference, TOKEN, tokenRef, findMentions, tagOf, QUOTE, ANCHOR} from './references.js';
 import {findQuote, textBoxes, detectEquations} from './layout.js';
 import {clampZoom, wheelZoomFactor} from './zoom.js';
 pdfjs.GlobalWorkerOptions.workerSrc = worker;
@@ -14,18 +14,21 @@ const h = (tag, props = {}, ...kids) => { const el = Object.assign(document.crea
 
 $('#app').innerHTML = `<header><button id="toggle-library" class="icon" title="Show or hide the library" aria-label="Toggle library">☰</button><a class="brand" href="/">m<span>Margin</span></a><span class="subtitle">A little closer to the paper.</span>
 <div class="header-tools"><label class="model-picker" title="Model used for new answers">Model <select id="model" disabled><option>…</option></select></label><span id="connection">Connecting…</span><button id="open-settings">Settings</button></div></header>
-<main><aside class="library"><div class="section-head"><div><small>LIBRARY</small><h2>Papers &amp; chats</h2></div><label class="file-button">+ Add PDF<input id="file" type="file" accept="application/pdf"></label></div><ul id="papers" aria-label="Papers"></ul></aside>
+<main><aside class="library"><div class="project-bar"><small>PROJECT</small><div class="project-row"><select id="project" aria-label="Project"></select><button id="project-rename" class="icon" title="Rename project" aria-label="Rename project">✎</button><button id="project-delete" class="icon del" title="Delete project" aria-label="Delete project">×</button></div></div>
+<div class="lib-section"><div class="lib-head"><small>PAPERS</small><label class="file-button small">+ Add PDF<input id="file" type="file" accept="application/pdf"></label></div><ul id="papers" aria-label="Papers"></ul></div>
+<div class="lib-section"><div class="lib-head"><small>CHATS</small><button id="new-chat-side" class="small" title="New chat about the open paper">+ New</button></div><ul id="chats" aria-label="Chats"></ul></div></aside>
 <section class="chat"><div class="section-head"><div><small id="chat-paper">YOUR STUDY DESK</small><h1 id="chat-title">Read. Question. Understand.</h1></div><button id="new-chat" disabled>New chat</button></div><div id="messages" tabindex="0" aria-label="Conversation"></div><form id="ask"><div id="context" hidden></div><textarea id="question" aria-label="Question about the paper" placeholder="What would you like to understand?" rows="3" maxlength="8000"></textarea><div class="compose-bottom"><span>Enter to send · Ctrl+Enter for a new line. Paper text + this chat are sent to OpenAI.</span><button id="send" type="submit">Ask ↗</button></div></form><p id="notice" role="status">Add a PDF, or pick one from the library.</p></section>
-<section class="reader"><div class="section-head"><div><small>SOURCE DOCUMENT</small><h2 id="filename">Your paper, in context</h2></div></div><div class="toolbar"><label><input id="follow" type="checkbox" checked> Follow chat</label><div><label>Page <input id="page" type="number" min="1" value="1"></label><span id="total">/ —</span><button id="go">Go</button></div><button id="marker" title="Marker: drag a box over any part of the page to ask about it (Esc to cancel)" aria-pressed="false">✎ Mark</button><div class="zoom" title="Pinch the trackpad (or Ctrl + scroll) over the page to zoom"><button id="zoom-out" aria-label="Zoom out">−</button><button id="zoom-reset" title="Reset to 100%">100%</button><button id="zoom-in" aria-label="Zoom in">+</button></div></div><div id="pdf"><div class="empty"><div class="paper-icon">∑</div><h2>Make room for the original.</h2><p>Add a PDF from your laptop, or pick a paper from the library.<br>Pinch the trackpad over a page to zoom.</p></div></div><details id="manual"><summary>Find a reference / correct an equation location</summary><div class="manual-grid"><label>Equation <input id="equation" placeholder="61"></label><label>PDF page <input id="map-page" type="number" min="1" value="1"></label><label>Position from top (%) <input id="map-y" type="number" min="0" max="100" value="50"></label><button id="find">Find equation</button><button id="save">Save correction</button><button id="remove">Remove correction</button></div><p>Corrections are saved with this paper in your library. Click the PDF while this panel is open to pick a position. Pages use PDF order, not printed journal numbers.</p></details></section></main>
+<section class="reader"><div class="section-head"><div><small>SOURCE DOCUMENT</small><h2 id="filename">Your paper, in context</h2><p id="paper-byline"></p></div><button id="paper-info" class="small" disabled title="Paper details: authors, venue, DOI, abstract">ⓘ Info</button></div><div class="toolbar"><label><input id="follow" type="checkbox" checked> Follow chat</label><div><label>Page <input id="page" type="number" min="1" value="1"></label><span id="total">/ —</span><button id="go">Go</button></div><button id="marker" title="Marker: drag a box over any part of the page to ask about it (Esc to cancel)" aria-pressed="false">✎ Mark</button><div class="zoom" title="Pinch the trackpad (or Ctrl + scroll) over the page to zoom"><button id="zoom-out" aria-label="Zoom out">−</button><button id="zoom-reset" title="Reset to 100%">100%</button><button id="zoom-in" aria-label="Zoom in">+</button></div></div><div id="pdf"><div class="empty"><div class="paper-icon">∑</div><h2>Make room for the original.</h2><p>Add a PDF from your laptop, or pick a paper from the library.<br>Pinch the trackpad over a page to zoom.</p></div></div><details id="manual"><summary>Find a reference / correct an equation location</summary><div class="manual-grid"><label>Equation <input id="equation" placeholder="61"></label><label>PDF page <input id="map-page" type="number" min="1" value="1"></label><label>Position from top (%) <input id="map-y" type="number" min="0" max="100" value="50"></label><button id="find">Find equation</button><button id="save">Save correction</button><button id="remove">Remove correction</button></div><p>Corrections are saved with this paper in your library. Click the PDF while this panel is open to pick a position. Pages use PDF order, not printed journal numbers.</p></details></section></main>
 <div id="pdf-pop" hidden><button type="button" id="pop-ask">Ask AI ↗</button></div>
 <dialog id="ask-text"><form id="ask-text-form"><h2 id="ask-text-title"></h2><label><input id="ask-text-input" autocomplete="off" maxlength="200"></label><div class="dialog-buttons"><button type="button" id="ask-text-cancel">Cancel</button><button type="submit" class="primary">Save</button></div></form></dialog>
+<dialog id="info"><div class="info-body"><div id="info-content"></div><div class="info-lookup"><label>DOI<input id="info-doi" placeholder="10.1109/…" autocomplete="off" spellcheck="false"></label><button type="button" id="info-lookup">Look up</button></div><p id="info-msg" role="status"></p><div class="dialog-buttons"><button type="button" id="info-close" class="primary">Close</button></div></div></dialog>
 <dialog id="settings"><form id="settings-form"><h2>Settings</h2>
 <label>OpenAI API key<input id="key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-…"></label><p id="key-hint" class="hint"></p><ol class="setup-steps"><li>Sign in at <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">platform.openai.com/api-keys</a> and click <b>Create new secret key</b>.</li><li>Add credit under Billing if your account has none; answers are billed per use.</li><li>Paste the key above and click <b>Save</b>.</li></ol><nav class="openai-links" aria-label="OpenAI account pages"><a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">Create an API key ↗</a><a href="https://platform.openai.com/usage" target="_blank" rel="noopener noreferrer">Usage ↗</a><a href="https://platform.openai.com/settings/organization/billing/overview" target="_blank" rel="noopener noreferrer">Billing ↗</a></nav>
 <label>Model<select id="settings-model"></select></label><label>…or type a model ID<input id="custom-model" autocomplete="off" spellcheck="false" placeholder="e.g. gpt-5.2"></label>
 <p class="hint">Stored only on this computer, in a file readable only by you, and applied immediately. A new key is checked with OpenAI before it is saved; it is sent only to OpenAI.</p>
 <p id="settings-msg" role="status"></p><div class="dialog-buttons"><button type="button" id="settings-cancel">Cancel</button><button type="submit" id="settings-save" class="primary">Save</button></div></form></dialog>`;
 
-let session = null, models = [], papers = [], paper = null, chat = null;
+let session = null, models = [], projects = [], project = null, paper = null, chat = null; // project: {id, name, papers, chats}
 let doc = null, pages = [], index = {}, overrides = {};
 let pageBoxes = {}, eqByPage = {}, context = null; // text-item geometry and detected equations per page; pending attachment
 let working = false, loading = false, generation = 0, activeRef = null, renderQueue = Promise.resolve();
@@ -49,7 +52,8 @@ function controls() {
   $('#send').disabled = !doc || !chat || working || loading;
   $('#file').disabled = working || loading;
   $('#new-chat').disabled = !paper || working || loading;
-  $('#papers').classList.toggle('locked', working || loading);
+  for (const id of ['#papers', '#chats']) $(id).classList.toggle('locked', working || loading);
+  $('#project').disabled = working || loading; $('#new-chat-side').disabled = !paper || working || loading;
 }
 
 // ---------- settings & models ----------
@@ -115,59 +119,100 @@ function askText(title, value) {
   });
 }
 
-// ---------- library ----------
+// ---------- library: projects, papers, chats ----------
 const fmtDate = iso => { const d = new Date(iso), t = new Date(); return d.toDateString() === t.toDateString() ? d.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : d.toLocaleDateString([], {month: 'short', day: 'numeric'}); };
-async function refreshLibrary() { try { papers = await api('/api/papers'); } catch (e) { notice(e.message); } renderLibrary(); }
-let expandedId = null, expandedAt = 0;
+const paperTitle = p => p?.meta?.title && !p.renamed ? p.meta.title : p?.name || 'Untitled paper';
+const byline = m => !m ? '' : [m.authors?.length ? m.authors[0].split(' ').pop() + ((m.authorCount ?? m.authors.length) > 1 ? ' et al.' : '') : null, m.year, m.venue].filter(Boolean).join(' · ');
+const pathP = (...parts) => `/api/projects/${project.id}` + parts.map(x => '/' + x).join('');
+
+async function refreshProjects() {
+  projects = await api('/api/projects');
+  let want = null; try { want = localStorage.getItem('margin-project'); } catch {}
+  const pick = projects.find(x => x.id === (project?.id ?? want)) || projects[0];
+  if (pick && pick.id !== project?.id) await loadProject(pick.id, false);
+  renderProjects();
+}
+function renderProjects() {
+  const sel = $('#project');
+  sel.replaceChildren(...projects.map(x => h('option', {value: x.id, textContent: `${x.name} (${x.papers})`, selected: x.id === project?.id})), h('option', {value: '__new', textContent: '+ New project…'}));
+  $('#project-delete').disabled = projects.length <= 1;
+}
+async function loadProject(pid, render = true) {
+  project = await api(`/api/projects/${pid}`);
+  try { localStorage.setItem('margin-project', pid); } catch {}
+  if (render) renderLibrary();
+}
+async function refreshProject() { if (project) { project = await api(pathP()); renderLibrary(); } }
+$('#project').onchange = async e => {
+  const v = e.target.value;
+  if (v === '__new') {
+    renderProjects();
+    const name = await askText('New project', ''); if (!name?.trim()) return;
+    try { const p = await api('/api/projects', {body: {name}}); await closePaper(); await loadProject(p.id); await refreshProjects(); notice(`Project "${p.name}" created. Add PDFs to it.`); } catch (err) { notice(err.message); }
+    return;
+  }
+  if (working) { renderProjects(); return; }
+  await closePaper(); await loadProject(v); renderProjects();
+  notice(`Project "${project.name}": ${project.papers.length ? 'pick a paper in the sidebar, or add a PDF.' : 'add a PDF to start.'}`);
+};
+$('#project-rename').onclick = async () => {
+  const name = await askText('Rename project', project.name); if (!name?.trim()) return;
+  try { await api(pathP(), {method: 'PATCH', body: {name}}); await refreshProjects(); await refreshProject(); } catch (e) { notice(e.message); }
+};
+$('#project-delete').onclick = async () => {
+  if (!confirm(`Delete the project "${project.name}" and its ${project.chats.length} chats? Papers that are in no other project are removed from the library too.`)) return;
+  try { await api(pathP(), {method: 'DELETE'}); await closePaper(); project = null; await refreshProjects(); renderLibrary(); notice('Project deleted.'); } catch (e) { notice(e.message); }
+};
+
+let expandedAt = 0;
 function renderLibrary() {
-  const list = $('#papers');
-  // The list is redrawn a few times while a paper opens; keep the slide-open for those redraws.
-  if (paper && paper.id !== expandedId) expandedAt = Date.now();
-  expandedId = paper?.id ?? null;
-  const opening = Date.now() - expandedAt < 400;
-  if (!papers.length) { list.replaceChildren(h('li', {className: 'library-empty', textContent: 'No papers yet. Add a PDF to start; it is kept here with its chats.'})); return; }
-  list.replaceChildren(...papers.map(p => {
+  const papersEl = $('#papers'), chatsEl = $('#chats');
+  if (!project) { papersEl.replaceChildren(); chatsEl.replaceChildren(); return; }
+  papersEl.replaceChildren(...(project.papers.length ? project.papers.map(p => {
     const current = paper?.id === p.id;
-    const open = h('button', {className: 'paper-name', textContent: p.name, title: `${p.name}\nDouble-click to rename`, onclick: () => !current && openPaper(p.id), ondblclick: () => renamePaper(p)});
-    const del = h('button', {className: 'icon del', textContent: '×', title: 'Remove this paper and all its chats', onclick: () => deletePaper(p)});
-    const li = h('li', {className: 'paper' + (current ? ' current' : '')}, h('div', {className: 'paper-row'}, open, del));
-    if (!current) { li.append(h('small', {className: 'paper-meta', textContent: `${p.chats} chat${p.chats === 1 ? '' : 's'} · ${fmtDate(p.openedAt)}`})); return li; }
-    const chats = h('ul', {className: 'chats' + (opening ? ' opening' : '')}, ...paper.chats.map(c => h('li', {className: c.id === chat?.id ? 'active' : ''},
-      h('button', {className: 'chat-name', title: 'Double-click to rename', onclick: () => c.id !== chat?.id && selectChat(c.id), ondblclick: () => renameChat(c)}, h('span', {textContent: c.title}), h('small', {textContent: fmtDate(c.updatedAt)})),
-      h('button', {className: 'icon del', textContent: '×', title: 'Delete this chat', onclick: () => deleteChat(c)}))));
-    chats.append(h('li', {}, h('button', {className: 'add-chat', textContent: '+ New chat', onclick: newChat})));
-    li.append(chats);
-    return li;
-  }));
+    const open = h('button', {className: 'paper-name', title: `${paperTitle(p)}\nDouble-click to rename`, onclick: () => !current && openPaper(p.id), ondblclick: () => renamePaper(p)},
+      h('span', {textContent: paperTitle(p)}), h('small', {textContent: byline(p.meta) || 'No details yet'}));
+    return h('li', {className: 'paper' + (current ? ' current' : '')}, h('div', {className: 'paper-row'}, open,
+      h('button', {className: 'icon del', textContent: '×', title: 'Remove from this project (and its chats here)', onclick: () => removePaper(p)})));
+  }) : [h('li', {className: 'library-empty', textContent: 'No papers in this project yet. Add a PDF.'})]));
+  const titles = Object.fromEntries(project.papers.map(p => [p.id, paperTitle(p)]));
+  chatsEl.replaceChildren(...(project.chats.length ? project.chats.map(c => h('li', {className: c.id === chat?.id ? 'active' : ''},
+    h('button', {className: 'chat-name', title: 'Double-click to rename', onclick: () => c.id !== chat?.id && selectChat(c), ondblclick: () => renameChat(c)},
+      h('span', {textContent: c.title}), h('small', {textContent: `${(titles[c.paperId] || 'Removed paper').slice(0, 28)} · ${fmtDate(c.updatedAt)}`})),
+    h('button', {className: 'icon del', textContent: '×', title: 'Delete this chat', onclick: () => deleteChat(c)}))) : [h('li', {className: 'library-empty', textContent: 'No chats yet.'})]));
+  $('#new-chat-side').disabled = !paper || working || loading;
 }
 async function renamePaper(p) {
-  const name = await askText('Rename paper', p.name); if (!name?.trim()) return;
-  try { const r = await api(`/api/papers/${p.id}`, {method: 'PATCH', body: {name}}); p.name = r.name; if (paper?.id === p.id) { paper.name = r.name; $('#filename').textContent = r.name; $('#chat-paper').textContent = r.name.toUpperCase(); } renderLibrary(); } catch (e) { notice(e.message); }
+  const name = await askText('Rename paper', paperTitle(p)); if (!name?.trim()) return;
+  try { const r = await api(`/api/papers/${p.id}`, {method: 'PATCH', body: {name}}); if (paper?.id === p.id) Object.assign(paper, {name: r.name, renamed: true}); await refreshProject(); showPaperHeader(); } catch (e) { notice(e.message); }
 }
-async function deletePaper(p) {
-  if (!confirm(`Remove "${p.name}" and all ${p.chats} of its chats from the library? The PDF copy in the library is deleted too.`)) return;
-  try { await api(`/api/papers/${p.id}`, {method: 'DELETE'}); if (paper?.id === p.id) await closePaper(); await refreshLibrary(); notice('Paper removed.'); } catch (e) { notice(e.message); }
+async function removePaper(p) {
+  const n = project.chats.filter(c => c.paperId === p.id).length;
+  if (!confirm(`Remove "${paperTitle(p)}" from "${project.name}"${n ? ` and delete its ${n} chat${n === 1 ? '' : 's'} here` : ''}? If no other project uses it, the stored PDF is deleted too.`)) return;
+  try { await api(pathP('papers', p.id), {method: 'DELETE'}); if (paper?.id === p.id) await closePaper(); await refreshProject(); refreshProjects(); notice('Paper removed from the project.'); } catch (e) { notice(e.message); }
 }
 async function renameChat(c) {
   const title = await askText('Rename chat', c.title); if (!title?.trim()) return;
-  try { Object.assign(c, await api(`/api/papers/${paper.id}/chats/${c.id}`, {method: 'PATCH', body: {title}})); if (chat?.id === c.id) { chat.title = c.title; $('#chat-title').textContent = c.title; } renderLibrary(); } catch (e) { notice(e.message); }
+  try { Object.assign(c, await api(pathP('chats', c.id), {method: 'PATCH', body: {title}})); if (chat?.id === c.id) { chat.title = c.title; $('#chat-title').textContent = c.title; } renderLibrary(); } catch (e) { notice(e.message); }
 }
 async function deleteChat(c) {
   if (!confirm(`Delete the chat "${c.title}"?`)) return;
   try {
-    await api(`/api/papers/${paper.id}/chats/${c.id}`, {method: 'DELETE'});
-    paper.chats = paper.chats.filter(x => x.id !== c.id);
-    if (chat?.id === c.id) { if (paper.chats.length) await selectChat(paper.chats[0].id); else await newChat(); }
-    renderLibrary(); refreshLibrary();
+    await api(pathP('chats', c.id), {method: 'DELETE'});
+    project.chats = project.chats.filter(x => x.id !== c.id);
+    if (chat?.id === c.id) { const next = project.chats.find(x => x.paperId === paper?.id); if (next) await selectChat(next); else await newChat(); }
+    renderLibrary();
   } catch (e) { notice(e.message); }
 }
 async function newChat() {
   if (!paper || working) return;
-  try { const c = await api(`/api/papers/${paper.id}/chats`, {method: 'POST'}); paper.chats.unshift({id: c.id, title: c.title, createdAt: c.createdAt, updatedAt: c.updatedAt, count: 0}); showChat(c); refreshLibrary(); $('#question').focus(); } catch (e) { notice(e.message); }
+  try { const c = await api(pathP('chats'), {body: {paperId: paper.id}}); project.chats.unshift({id: c.id, title: c.title, paperId: c.paperId, createdAt: c.createdAt, updatedAt: c.updatedAt, count: 0}); showChat(c); $('#question').focus(); } catch (e) { notice(e.message); }
 }
-async function selectChat(cid) {
+// A chat is about one paper for now; selecting a chat of another paper opens that paper.
+async function selectChat(c) {
   if (working) return;
-  try { showChat(await api(`/api/papers/${paper.id}/chats/${cid}`)); } catch (e) { notice(e.message); }
+  if (c.paperId && c.paperId !== paper?.id) { await openPaper(c.paperId, null, c.id); return; }
+  try { showChat(await api(pathP('chats', c.id))); } catch (e) { notice(e.message); }
 }
 function showChat(c) {
   chat = c; activeRef = null;
@@ -178,9 +223,68 @@ function showChat(c) {
   $('#messages').scrollTop = $('#messages').scrollHeight;
   renderLibrary(); controls();
 }
+$('#new-chat-side').onclick = () => newChat();
+
+// ---------- paper details (OpenAlex / Crossref) ----------
+function showPaperHeader() {
+  const t = paper ? paperTitle(paper) : 'Your paper, in context';
+  $('#filename').textContent = t; $('#filename').title = t;
+  $('#paper-byline').textContent = paper?.meta ? byline(paper.meta) : '';
+  $('#chat-paper').textContent = paper ? t.toUpperCase() : 'YOUR STUDY DESK';
+  $('#paper-info').disabled = !paper;
+}
+// DOI candidates and a title guess (the largest text near the top of page 1) for the lookup.
+function lookupHints() {
+  const text = pages.slice(0, 2).map(p => p.text).join('\n');
+  const dois = [...new Set((text.replace(/\s*\n\s*/g, ' ').match(/\b10\.\d{4,9}\/[^\s"<>,;]+/gi) || []).map(d => d.replace(/[.)\]]+$/, '')))].slice(0, 5);
+  const el = $('.pdf-page[data-page="1"]'), H = Number(el?.dataset.height || 792);
+  const top = (pageBoxes[1] || []).filter(b => b.s.trim() && b.y0 < H * 0.45);
+  const maxH = Math.max(0, ...top.map(b => b.y1 - b.y0));
+  const title = top.filter(b => b.y1 - b.y0 >= 0.85 * maxH).sort((a, b) => a.y0 - b.y0 || a.x0 - b.x0).map(b => b.s).join(' ').replace(/\s+/g, ' ').trim();
+  return {dois, title: title.length > 200 ? title.slice(0, 200) : title};
+}
+async function lookupMetadata({doi, quiet = false} = {}) {
+  if (!paper) return;
+  const id = paper.id;
+  try {
+    const r = await api(`/api/papers/${id}/metadata`, {body: doi ? {doi} : lookupHints()});
+    if (paper?.id !== id) return;
+    Object.assign(paper, {meta: r.meta, metaLookup: r.metaLookup, name: r.name});
+    showPaperHeader(); await refreshProject();
+    if (!quiet) notice(`Details found: ${byline(r.meta) || r.meta.title}.`);
+    return true;
+  } catch (e) { if (!quiet) notice(e.message); return false; }
+}
+// Look up automatically once per paper (a miss is retried after a week).
+function maybeLookup() {
+  const l = paper?.metaLookup;
+  if (paper && !paper.meta && (!l || Date.now() - new Date(l.at) > 7 * 864e5)) lookupMetadata({quiet: true});
+}
+function renderInfo() {
+  const m = paper?.meta, box = $('#info-content');
+  $('#info-doi').value = m?.doi || '';
+  if (!m) { box.replaceChildren(h('h2', {textContent: paperTitle(paper)}), h('p', {className: 'hint', textContent: 'No details found yet. Enter the paper\'s DOI below (it usually appears on the first page) and click Look up.'})); return; }
+  const link = (href, text) => h('a', {href, target: '_blank', rel: 'noopener noreferrer', textContent: text});
+  const rows = [['Authors', m.authors?.join(', ')], ['Published', [m.venue, m.date || m.year].filter(Boolean).join(' · ')], ['Type', m.type], ['Cited by', m.citedBy != null ? `${m.citedBy} works` : null], ['References', m.references?.length ? `${m.references.length} works` : null]].filter(([, v]) => v);
+  box.replaceChildren(h('h2', {textContent: m.title || paperTitle(paper)}),
+    h('dl', {}, ...rows.flatMap(([k, v]) => [h('dt', {textContent: k}), h('dd', {textContent: v})])),
+    h('nav', {className: 'info-links'}, ...[m.doi && link(`https://doi.org/${m.doi}`, `doi.org/${m.doi} ↗`), m.openalexId && link(`https://openalex.org/${m.openalexId}`, 'OpenAlex ↗'), (m.pdfUrl || m.oaUrl) && link(m.pdfUrl || m.oaUrl, 'Open-access copy ↗')].filter(Boolean)),
+    ...(m.abstract ? [h('h3', {textContent: 'Abstract'}), h('p', {className: 'abstract', textContent: m.abstract})] : []),
+    h('p', {className: 'hint', textContent: `Source: ${m.source === 'crossref' ? 'Crossref' : 'OpenAlex'}, retrieved ${fmtDate(m.fetchedAt)}.`}));
+}
+$('#paper-info').onclick = () => { $('#info-msg').textContent = ''; renderInfo(); $('#info').showModal(); };
+$('#info-close').onclick = () => $('#info').close();
+$('#info-lookup').onclick = async () => {
+  const doi = $('#info-doi').value.trim();
+  $('#info-msg').textContent = 'Looking up…'; $('#info-lookup').disabled = true;
+  const ok = await lookupMetadata(doi ? {doi, quiet: true} : {quiet: true});
+  $('#info-lookup').disabled = false;
+  $('#info-msg').textContent = ok ? 'Updated.' : 'Nothing found for that. Check the DOI (it starts with 10.).';
+  renderInfo();
+};
 function showWelcome() {
-  $('#messages').replaceChildren(h('div', {className: 'welcome', innerHTML: `<span class="eyebrow">ROBOTICS / PAPER COMPANION</span><h2>Follow the reasoning.<br>Keep the source in sight.</h2><p>Study a paper with the original equations beside every explanation. Each PDF you add is kept in the library with all of its chats.</p><div class="steps"><p><b>01</b> Add a PDF, or pick one from the library.</p><p><b>02</b> Ask a question; start more chats any time.</p><p><b>03</b> Select a citation, or scroll the chat to follow it.</p></div>`}));
-  $('#chat-title').textContent = 'Read. Question. Understand.'; $('#chat-paper').textContent = 'YOUR STUDY DESK';
+  $('#messages').replaceChildren(h('div', {className: 'welcome', innerHTML: `<span class="eyebrow">ROBOTICS / PAPER COMPANION</span><h2>Follow the reasoning.<br>Keep the source in sight.</h2><p>Study papers with the original equations beside every explanation. Papers are grouped into projects, each with its own chats.</p><div class="steps"><p><b>01</b> Add a PDF to the project, or pick one in the sidebar.</p><p><b>02</b> Ask a question; start more chats any time.</p><p><b>03</b> Select a citation, or scroll the chat to follow it.</p></div>`}));
+  $('#chat-title').textContent = 'Read. Question. Understand.'; showPaperHeader();
 }
 
 // ---------- PDF ----------
@@ -195,25 +299,27 @@ async function closePaper() {
   await destroyDoc();
   doc = null; paper = null; chat = null; pages = []; index = {}; overrides = {}; activeRef = null; pageBoxes = {}; eqByPage = {}; setContext(null); hidePop(); setMarking(false);
   $('#pdf').replaceChildren(h('div', {className: 'empty', innerHTML: '<div class="paper-icon">∑</div><h2>Make room for the original.</h2><p>Add a PDF from your laptop, or pick a paper from the library.</p>'}));
-  $('#filename').textContent = 'Your paper, in context'; $('#total').textContent = '/ —';
-  showWelcome(); controls();
+  $('#total').textContent = '/ —';
+  showWelcome(); controls(); renderLibrary();
 }
 
 $('#file').onchange = async e => {
   const file = e.target.files[0]; e.target.value = '';
   if (!file) return;
   if (file.size > 60 * 1024 * 1024) { notice('Choose a PDF smaller than 60 MB.'); return; }
-  loading = true; controls(); notice('Adding to the library…');
+  if (!project) return;
+  loading = true; controls(); notice(`Adding to "${project.name}"…`);
   try {
     const bytes = new Uint8Array(await file.arrayBuffer());
-    const p = await api('/api/papers', {body: bytes, headers: {'Content-Type': 'application/pdf', 'X-Filename': encodeURIComponent(file.name)}});
+    const p = await api(pathP('papers'), {body: bytes, headers: {'Content-Type': 'application/pdf', 'X-Filename': encodeURIComponent(file.name)}});
     loading = false;
+    await refreshProject(); refreshProjects();
     await openPaper(p.id, bytes);
   } catch (err) { notice('Could not add PDF: ' + err.message); }
-  finally { loading = false; controls(); refreshLibrary(); }
+  finally { loading = false; controls(); }
 };
 
-async function openPaper(id, bytes) {
+async function openPaper(id, bytes, chatId) {
   if (working || loading) return;
   loading = true; controls();
   try {
@@ -229,7 +335,7 @@ async function openPaper(id, bytes) {
       const old = JSON.parse(localStorage.getItem('margin-' + id) || '{}');
       if (Object.keys(old).length) { overrides = (await api(`/api/papers/${id}`, {method: 'PATCH', body: {overrides: old}})).overrides; localStorage.removeItem('margin-' + id); }
     } catch {}
-    $('#filename').textContent = meta.name; $('#filename').title = meta.name; $('#chat-paper').textContent = meta.name.toUpperCase();
+    showPaperHeader(); renderLibrary();
     $('#pdf').replaceChildren();
     doc = await pdfjs.getDocument({data: bytes}).promise;
     if (doc.numPages > 300) throw Error('This reader supports up to 300 pages.');
@@ -250,9 +356,10 @@ async function openPaper(id, bytes) {
       el.dataset.page = n; el.dataset.width = vp.width; el.dataset.height = vp.height; sizePage(el);
       $('#pdf').append(el); pageObserver.observe(el);
     }
-    if (meta.chats.length) await selectChat(meta.chats[0].id); else { loading = false; await newChat(); }
+    const mine = project.chats.filter(c => c.paperId === id), pick = mine.find(c => c.id === chatId) || mine[0];
+    if (pick) showChat(await api(pathP('chats', pick.id))); else { loading = false; await newChat(); }
     notice(`Ready · ${pages.length} pages · ${Object.keys(index).length} detected equations. ${pages.every(p => !p.text.trim()) ? 'No text detected: OCR this PDF before asking questions.' : ''}`);
-    refreshLibrary();
+    maybeLookup();
   } catch (err) { await destroyDoc(); notice('Could not open PDF: ' + err.message); }
   finally { loading = false; controls(); renderLibrary(); }
 }
@@ -338,23 +445,36 @@ function showMarks(el, marks, y, page) {
   $('#page').value = page;
 }
 // Highlight the quoted words; search the cited page first, then the rest of the paper.
+// Highlight the cited or quoted words. The cited page wins if it matches well; otherwise the
+// closest match anywhere in the paper is used (models sometimes cite a neighbouring page).
 async function navigateQuote(ref) {
-  const order = [ref.page, ...Object.keys(pageBoxes).map(Number).filter(n => n !== ref.page)].filter(n => pageBoxes[n]);
-  for (const n of order) {
-    const el = $(`.pdf-page[data-page="${n}"]`);
-    const rects = findQuote(pageBoxes[n], ref.quote, Number(el.dataset.width), Number(el.dataset.height));
-    if (!rects) continue;
-    activeRef = ref;
-    await queueRender(el);
-    showMarks(el, rects.map(r => { const d = h('div', {className: 'highlight text', title: 'Quoted text'}); placeBox(d, r); return d; }), rects[0].y0, n);
-    notice(`Quoted text · PDF page ${n}${n !== ref.page ? ` (cited as page ${ref.page})` : ''}`);
+  const what = ref.anchor ? 'Cited text' : 'Quoted text';
+  const find = n => { const el = $(`.pdf-page[data-page="${n}"]`); return pageBoxes[n] && el ? findQuote(pageBoxes[n], ref.quote, Number(el.dataset.width), Number(el.dataset.height)) : null; };
+  let best = null, bestPage = null;
+  const own = find(ref.page);
+  if (own && own.dist <= 0.1) { best = own; bestPage = ref.page; }
+  else {
+    if (own) { best = own; bestPage = ref.page; }
+    for (const n of Object.keys(pageBoxes).map(Number)) {
+      if (n === ref.page) continue;
+      const r = find(n);
+      if (r && (!best || r.dist < best.dist - 0.02)) { best = r; bestPage = n; }
+    }
+  }
+  if (!best) {
+    await navigate({page: ref.page});
+    notice(`The cited words were not found in the extracted text; showing PDF page ${ref.page}.`);
     return;
   }
-  await navigate({page: ref.page});
-  notice(`The quoted words were not found in the extracted text; showing PDF page ${ref.page}.`);
+  activeRef = ref;
+  const el = $(`.pdf-page[data-page="${bestPage}"]`);
+  await queueRender(el);
+  showMarks(el, best.map(r => { const d = h('div', {className: 'highlight text', title: what}); placeBox(d, r); return d; }), best[0].y0, bestPage);
+  notice(`${what} · PDF page ${bestPage}${bestPage !== ref.page ? ` (cited as page ${ref.page})` : ''}${best.dist > 0 ? ' · close match' : ''}`);
 }
 
-const refLabel = ref => ref.quote ? `“${ref.quote.split(/\s+/).slice(0, 5).join(' ')}…” · p. ${ref.page}` : ref.equation ? `Eq. (${ref.equation})${ref.page ? ' · p. ' + ref.page : ''}` : `Page ${ref.page}`;
+const words4 = q => { const w = q.split(/\s+/); return w.slice(0, 4).join(' ') + (w.length > 4 ? '…' : ''); };
+const refLabel = ref => ref.anchor ? `p. ${ref.page} · “${words4(ref.quote)}”` : ref.quote ? `“${ref.quote.split(/\s+/).slice(0, 5).join(' ')}…” · p. ${ref.page}` : ref.equation ? `Eq. (${ref.equation})${ref.page ? ' · p. ' + ref.page : ''}` : `Page ${ref.page}`;
 const MATH = /\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\$\$[\s\S]*?\$\$/g;
 
 // Markdown + KaTeX, with citations made clickable where they appear:
@@ -363,16 +483,19 @@ const MATH = /\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\$\$[\s\S]*?\$\$/g;
 function renderBody(text, linkRefs) {
   const body = h('div', {className: 'message-body'});
   const math = [], cites = [], quotes = [];
-  let t = linkRefs ? text.replace(QUOTE, (_, p, q) => { quotes.push({page: Number(p), quote: q.replace(/\s+/g, ' ').trim()}); return `QUOTEPH${quotes.length - 1}END`; }) : text;
+  const anchors = [];
+  let t = linkRefs ? text.replace(QUOTE, (_, p, q) => { quotes.push({page: Number(p), quote: q.replace(/\s+/g, ' ').trim()}); return `QUOTEPH${quotes.length - 1}END`; })
+    .replace(ANCHOR, (_, p, q) => { anchors.push({page: Number(p), quote: q.replace(/\s+/g, ' ').trim(), anchor: true}); return `ANCHPH${anchors.length - 1}END`; }) : text;
   t = t.replace(MATH, m => { math.push(m); return `MATHPH${math.length - 1}END`; });
   if (linkRefs) t = t.replace(TOKEN, (_, eq, p1, p2) => { cites.push(tokenRef(eq, p1, p2)); return `CITEPH${cites.length - 1}END`; });
   body.innerHTML = DOMPurify.sanitize(marked.parse(t));
   body.querySelectorAll('img').forEach(img => img.remove());
   body.querySelectorAll('a').forEach(a => { a.rel = 'noopener noreferrer'; a.target = '_blank'; });
   const escape = s => { const span = document.createElement('span'); span.textContent = s; return span.innerHTML; };
-  body.innerHTML = body.innerHTML.replace(/MATHPH(\d+)END/g, (_, i) => escape(math[Number(i)])).replace(/CITEPH(\d+)END/g, (_, i) => `<button type="button" class="cite" data-i="${i}"></button>`).replace(/QUOTEPH(\d+)END/g, (_, i) => `<button type="button" class="quote-link" data-q="${i}"></button>`);
+  body.innerHTML = body.innerHTML.replace(/MATHPH(\d+)END/g, (_, i) => escape(math[Number(i)])).replace(/CITEPH(\d+)END/g, (_, i) => `<button type="button" class="cite" data-i="${i}"></button>`).replace(/QUOTEPH(\d+)END/g, (_, i) => `<button type="button" class="quote-link" data-q="${i}"></button>`).replace(/ANCHPH(\d+)END/g, (_, i) => `<button type="button" class="cite anchor" data-a="${i}"></button>`);
+  body.querySelectorAll('button.cite.anchor').forEach(b => { b.ref = anchors[Number(b.dataset.a)]; b.textContent = refLabel(b.ref); b.title = `Highlight in the paper: “${b.ref.quote}”`; });
   body.querySelectorAll('button.quote-link').forEach(b => { b.ref = quotes[Number(b.dataset.q)]; b.append(h('span', {textContent: `“${b.ref.quote}”`}), h('small', {textContent: ` p. ${b.ref.page} ↗`})); b.title = 'Highlight this passage in the paper'; });
-  body.querySelectorAll('button.cite').forEach(b => { b.ref = cites[Number(b.dataset.i)]; b.textContent = refLabel(b.ref); b.title = 'Show in the paper'; });
+  body.querySelectorAll('button.cite:not(.anchor)').forEach(b => { b.ref = cites[Number(b.dataset.i)]; b.textContent = refLabel(b.ref); b.title = 'Show in the paper'; });
   renderMath(body, {delimiters: [{left: '$$', right: '$$', display: true}, {left: '\\[', right: '\\]', display: true}, {left: '\\(', right: '\\)', display: false}], throwOnError: false});
   if (!linkRefs) return body;
   for (const display of body.querySelectorAll('.katex-display')) {
@@ -381,7 +504,7 @@ function renderBody(text, linkRefs) {
     let next = host.nextSibling;
     while (next && next.nodeType === Node.TEXT_NODE && !next.textContent.trim()) next = next.nextSibling;
     let ref = null;
-    if (next?.classList?.contains('cite')) { ref = next.ref; next.remove(); }
+    if (next?.classList?.contains('cite') && !next.classList.contains('anchor')) { ref = next.ref; next.remove(); }
     else { const tag = tagOf(display.querySelector('annotation')?.textContent); if (tag) ref = {equation: tag, page: null}; }
     if (!ref) continue;
     const link = h('span', {className: 'eq-link', tabIndex: 0, title: 'Show this equation in the paper'});
@@ -416,7 +539,10 @@ function addMessage(role, text, meta = {}, scroll = true) {
   article.append(body);
   if (role === 'assistant') {
     const quoteRefs = [...text.matchAll(QUOTE)].map(m => ({page: Number(m[1]), quote: m[2].replace(/\s+/g, ' ').trim()}));
-    const refs = [...parseReferences(text.replace(QUOTE, '')), ...quoteRefs]; article.refs = refs;
+    const anchorRefs = [...text.matchAll(ANCHOR)].map(m => ({page: Number(m[1]), quote: m[2].replace(/\s+/g, ' ').trim(), anchor: true}));
+    const seen = new Set(), uniq = r => { const k = JSON.stringify(r); if (seen.has(k)) return false; seen.add(k); return true; };
+    // Precise anchors first, so "follow chat" jumps to the exact passage.
+    const refs = [...anchorRefs, ...quoteRefs, ...parseReferences(text.replace(QUOTE, '').replace(ANCHOR, ''))].filter(uniq); article.refs = refs;
     if (refs.length) {
       article.append(h('div', {className: 'citations'}, ...refs.map(ref => h('button', {textContent: refLabel(ref), onclick: () => navigate(ref)}))));
       article.tabIndex = 0;
@@ -454,16 +580,15 @@ $('#ask').onsubmit = async e => {
   if (!pages.some(p => p.text.trim())) { notice('This PDF has no extractable text. Use OCR first.'); return; }
   if (!session?.configured) { notice('Add your OpenAI API key in Settings first.'); $('#open-settings').click(); return; }
   working = true; controls(); showStatus();
-  const target = chat, paperId = paper.id;
+  const target = chat, projectId = project.id;
   const pending = addMessage('user', question, {at: new Date().toISOString(), image}); $('#question').value = ''; setContext(null);
   notice(`Reading the paper and asking ${session.model}…`);
   const thinking = h('article', {className: 'message assistant thinking', ariaLabel: 'Margin is thinking'}, h('small', {textContent: 'MARGIN · ' + session.model}), h('div', {className: 'dots'}, h('span'), h('span'), h('span')));
   $('#messages').append(thinking); thinking.scrollIntoView({behavior: 'smooth', block: 'end'});
   try {
-    const r = await api(`/api/papers/${paperId}/chats/${target.id}/messages`, {body: {question, pages, ...(image ? {image} : {})}});
+    const r = await api(`/api/projects/${projectId}/chats/${target.id}/messages`, {body: {question, pages, ...(image ? {image} : {})}});
     target.messages.push(...r.messages); target.title = r.chat.title;
-    const summary = paper?.chats.find(c => c.id === r.chat.id); if (summary) Object.assign(summary, r.chat);
-    paper?.chats.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    if (project?.id === projectId) { const summary = project.chats.find(c => c.id === r.chat.id); if (summary) Object.assign(summary, r.chat); project.chats.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)); }
     if (chat === target) {
       pending.remove(); // replace the optimistic copy with the stored one
       addMessage('user', r.messages[0].content, r.messages[0], false);
@@ -472,7 +597,7 @@ $('#ask').onsubmit = async e => {
       notice('Answer ready. Select a citation to inspect its source.');
       if ($('#follow').checked && card.refs?.length) navigate(card.refs[0]);
     }
-    renderLibrary(); refreshLibrary();
+    renderLibrary();
   } catch (err) {
     notice(err.message);
     if (chat === target) { pending.remove(); $('#question').value = typed; setContext(ctx); }
@@ -673,6 +798,6 @@ try { session = await fetch('/api/status').then(r => r.json()); } catch { notice
 showStatus();
 if (session) {
   if (!session.configured) notice('Welcome! Open Settings to add your OpenAI API key.');
-  await Promise.all([loadModels(), refreshLibrary()]);
-  if (papers.length && !paper) notice(session.configured ? 'Pick a paper from the library, or add a PDF.' : 'Open Settings to add your OpenAI API key.');
+  await Promise.all([loadModels(), refreshProjects().then(() => renderLibrary()).catch(e => notice(e.message))]);
+  if (project?.papers.length && !paper) notice(session.configured ? `Project "${project.name}": pick a paper in the sidebar, or add a PDF.` : 'Open Settings to add your OpenAI API key.');
 }

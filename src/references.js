@@ -39,3 +39,6 @@ export function tagOf(tex) {
 
 // Verbatim quotes from the paper: [[quote:7|exact words]] (page, then the words).
 export const QUOTE = /\[\[quote:(\d+)\|([^\]]{3,800}?)\]\]/gi;
+
+// Anchored citations: [[cite:7|a few exact words]] point at the supporting passage on a page.
+export const ANCHOR = /\[\[cite:(\d+)\|([^\]]{3,400}?)\]\]/gi;

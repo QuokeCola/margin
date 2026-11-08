@@ -161,3 +161,49 @@ dialog[open]::backdrop{animation:fade .26s ease}
 .marker-box{position:absolute;z-index:4;border:2px solid #d0782f;border-radius:4px;background:#f2a35a26;pointer-events:none}
 .marker-box.draft{border-style:dashed}
 .marker-box.attached{border-color:#315e4e;background:#5c8f6f1f;animation:fade .2s ease}
+/* tables in answers: wrap at word boundaries and scroll sideways when too wide */
+.message-body table{display:block;max-width:100%;overflow-x:auto}
+.message-body td,.message-body th{overflow-wrap:normal;word-break:normal;min-width:5.5em;vertical-align:top}
+.cite.anchor{max-width:100%;overflow:hidden;text-overflow:ellipsis}
+
+/* ---------- v2: projects sidebar ---------- */
+.library{gap:14px;overflow-y:auto}
+.project-bar small,.lib-head small{font-size:10px;letter-spacing:1.8px;color:#768b77}
+.project-row{display:flex;align-items:center;gap:4px;margin-top:6px}
+#project{flex:1;min-width:0;border:1px solid #c8d3c6;border-radius:7px;padding:7px 8px;background:#fff;color:#203c39;font-size:13px;font-weight:600}
+.lib-section{display:flex;flex-direction:column;min-height:0}
+.lib-head{display:flex;align-items:center;justify-content:space-between;padding:0 4px 6px;border-bottom:1px solid #dfe6d9;margin-bottom:6px}
+.small,.file-button.small{font-size:11px;padding:4px 9px}
+#papers,#chats{list-style:none;margin:0;padding:0;overflow:visible;flex:none}
+#papers .paper{padding:2px;margin-bottom:2px}
+#papers .paper-name{display:flex;flex-direction:column;align-items:flex-start;gap:1px;white-space:normal}
+#papers .paper-name span{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:12.5px;line-height:1.35}
+#papers .paper-name small{font-size:10px;color:#82907f;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+#papers .paper.current{background:#fff;box-shadow:0 1px 6px #243a3512}
+#papers .paper.current .paper-name span{font-weight:600}
+#chats li{display:flex;align-items:center;border-radius:6px}
+#chats .chat-name{flex-direction:column;align-items:flex-start;gap:1px}
+#chats .chat-name span{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#chats .chat-name small{font-size:10px;color:#8b9887;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#chats li.active .chat-name{background:#e4ece0;box-shadow:inset 3px 0 0 #5c8f6f}
+#chats li:hover .del{visibility:visible}
+#papers.locked,#chats.locked{pointer-events:none;opacity:.6}
+
+/* paper header + details */
+#paper-byline{margin:0;font-size:11px;color:#6f8b74;max-width:520px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.reader>.section-head{align-items:flex-start}
+#paper-info{margin-top:6px;flex:none}
+#info{width:min(620px,calc(100vw - 32px));max-height:85vh;overflow:auto}
+#info h2{font:21px/1.3 Georgia,serif;margin:0 0 14px}
+#info h3{font-size:12px;letter-spacing:1.4px;color:#6f8b74;margin:16px 0 4px;font-weight:600}
+#info dl{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font-size:13px;margin:0}
+#info dt{color:#768b77}#info dd{margin:0}
+.info-links{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.info-links a{font-size:12px;color:#2f584a;text-decoration:none;border:1px solid #c8d3c6;background:#fff;border-radius:999px;padding:4px 10px}
+.abstract{font-size:13px;line-height:1.6;color:#33463a;margin:0}
+.info-lookup{display:flex;align-items:flex-end;gap:8px;margin-top:16px;border-top:1px solid #dfe6d9;padding-top:12px}
+.info-lookup label{flex:1;display:flex;flex-direction:column;gap:4px;font-size:12px;margin:0}
+.info-lookup input{border:1px solid #c8d3c6;border-radius:6px;padding:6px 8px}
+#info-msg{font-size:12px;color:#6f8b74;min-height:16px}
+@media(max-width:800px){.library{max-height:none}}
+#project-delete{visibility:visible}#project-delete:disabled{visibility:hidden}

@@ -137,26 +137,52 @@ export function equationBox(boxes, label, W, H, otherLabels = null, debug = null
   return norm({x0: Math.max(col.left - pad - 2, box.x0 - pad), y0: box.y0 - pad, x1: Math.min(col.right + pad, box.x1 + pad), y1: box.y1 + pad}, W, H);
 }
 
-// Highlight rectangles (one per line) for the words of `quote` on a page, or null.
-// Matching ignores case, spacing, hyphenation and punctuation.
+// Approximate substring search: the stretch of `text` closest to `q` (edit distance, free start and
+// end in `text`). Returns {start, end, dist}. O(len(q) * len(text)) with two rolling rows.
+function closest(text, q) {
+  const m = q.length, n = text.length;
+  let prev = new Int32Array(n + 1), prevS = new Int32Array(n + 1), cur = new Int32Array(n + 1), curS = new Int32Array(n + 1);
+  for (let j = 0; j <= n; j++) { prev[j] = 0; prevS[j] = j; }
+  for (let i = 1; i <= m; i++) {
+    cur[0] = i; curS[0] = 0; const qc = q.charCodeAt(i - 1);
+    for (let j = 1; j <= n; j++) {
+      let d = prev[j - 1] + (text.charCodeAt(j - 1) === qc ? 0 : 1), st = prevS[j - 1];
+      if (prev[j] + 1 < d) { d = prev[j] + 1; st = prevS[j]; }
+      if (cur[j - 1] + 1 < d) { d = cur[j - 1] + 1; st = curS[j - 1]; }
+      cur[j] = d; curS[j] = st;
+    }
+    [prev, cur] = [cur, prev]; [prevS, curS] = [curS, prevS];
+  }
+  let end = 0; for (let j = 1; j <= n; j++) if (prev[j] < prev[end]) end = j;
+  return {start: prevS[end], end, dist: prev[end]};
+}
+
+// Highlight rectangles (one per line) for the words of `quote` on a page, or null. Matching ignores
+// case, spacing, hyphenation and punctuation, and tolerates small differences (a dropped word, a
+// garbled symbol): up to ~20% of the characters. The result carries `dist` (0 = exact).
 export function findQuote(boxes, quote, W, H) {
   const key = s => s.normalize('NFKC').toLowerCase().replace(/[^a-z0-9]/g, '');
   const stream = [], owner = [], frac = [];
   boxes.forEach((b, i) => { const k = b.s.normalize('NFKC').toLowerCase(); for (let j = 0; j < k.length; j++) if (/[a-z0-9]/.test(k[j])) { stream.push(k[j]); owner.push(i); frac.push(k.length > 1 ? j / (k.length) : 0); } });
-  const text = stream.join(''), q = key(quote);
-  if (q.length < 6) return null;
-  let at = text.indexOf(q), len = q.length;
-  if (at < 0 && q.length > 50) { // fall back to the longest of the opening/closing 40 characters that matches
-    for (const part of [q.slice(0, 40), q.slice(-40)]) { const i = text.indexOf(part); if (i >= 0) { at = i; len = part.length; break; } }
+  const text = stream.join(''), q = key(quote).slice(0, 400);
+  if (q.length < 6 || !text.length) return null;
+  let at = text.indexOf(q), len = q.length, dist = 0;
+  if (at < 0) {
+    const r = closest(text, q);
+    dist = r.dist;
+    if (dist > Math.max(2, Math.floor(0.2 * q.length))) return null;
+    at = r.start; len = r.end - r.start;
   }
-  if (at < 0) return null;
+  if (len <= 0) return null;
   const parts = new Map();
   for (let k = at; k < at + len; k++) {
     const i = owner[k], b = boxes[i], f = frac[k], w = b.x1 - b.x0;
     const x0 = b.x0 + w * f, x1 = b.x0 + w * (f + 1 / Math.max(1, b.s.length));
     const p = parts.get(i); if (p) { p.x1 = Math.max(p.x1, x1); } else parts.set(i, {x0, y0: b.y0, x1, y1: b.y1});
   }
-  return linesOf([...parts.values()].map(p => ({...p, s: ''}))).map(l => norm({x0: l.x0 - 1, y0: l.y0 - 1, x1: l.x1 + 1, y1: l.y1 + 1}, W, H));
+  const rects = linesOf([...parts.values()].map(p => ({...p, s: ''}))).map(l => norm({x0: l.x0 - 1, y0: l.y0 - 1, x1: l.x1 + 1, y1: l.y1 + 1}, W, H));
+  rects.dist = dist / q.length;
+  return rects;
 }
 
 // A real equation number ends its line: no text follows it within its column, and it is

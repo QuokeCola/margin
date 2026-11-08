@@ -56,3 +56,11 @@ test('quotes match across spacing, case and hyphenation', () => {
   const rects = findQuote(boxes, 'residual is a filtered version of the external torque', W, H);
   assert.equal(rects.length, 2);
 });
+
+test('quotes tolerate small differences and reject unrelated text', () => {
+  const boxes = [...line(100, 'Collision detection uses the generalized momentum of the robot', 50, 550), ...line(114, 'and a first-order filter on the residual signal.', 50, 400)];
+  const near = findQuote(boxes, 'collision detection uses generalised momentum of the robot', W, H); // one word dropped, one spelling changed
+  assert.ok(near && near.dist > 0 && near.dist <= 0.2, `dist ${near?.dist}`);
+  assert.equal(findQuote(boxes, 'the stiffness matrix of the ball screw nut', W, H), null);
+  assert.equal(findQuote(boxes, 'first-order filter on the residual', W, H).dist, 0);
+});
