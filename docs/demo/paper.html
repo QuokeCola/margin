@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>Detecting Robot Collisions with a Momentum Observer</title>
+<!-- Original demo paper for Margin's README. Render: see docs/demo/README.md -->
+<link rel="stylesheet" href="../../node_modules/katex/dist/katex.min.css">
+<script src="../../node_modules/katex/dist/katex.min.js"></script>
+<style>
+@page{size:Letter;margin:0.7in 0.65in}
+body{font:10pt/1.32 "Times New Roman",Times,serif;color:#111;margin:0}
+h1{font-size:17pt;text-align:center;margin:0 0 6pt;font-weight:normal}
+.authors{text-align:center;font-size:10pt;margin-bottom:4pt}
+.affil{text-align:center;font-size:8.5pt;font-style:italic;margin-bottom:12pt}
+.abstract{font-size:9pt;margin:0 0.35in 12pt;text-align:justify}
+.cols{column-count:2;column-gap:0.28in;text-align:justify}
+h2{font-size:10pt;text-align:center;font-variant:small-caps;margin:10pt 0 5pt;break-after:avoid}
+p{margin:0 0 5pt;text-indent:1.2em}
+.eq{margin:6pt 0;break-inside:avoid}
+.katex-display{margin:0}
+.katex{font-size:1.02em}
+.foot{font-size:8pt;color:#555;margin-top:10pt;text-indent:0}
+</style></head><body>
+<h1>Detecting Robot Collisions with a Generalized-Momentum Observer: A Short Tutorial</h1>
+<div class="authors">Margin Demo Authors</div>
+<div class="affil">An original example document for demonstrating the Margin reader; equations follow the standard momentum-observer formulation</div>
+<div class="abstract"><b><i>Abstract</i>—</b>Robots that share space with people must notice unexpected contact quickly. This tutorial derives a residual signal from the generalized momentum of a manipulator. The residual needs only joint positions, joint velocities and commanded motor torques, avoids numerical differentiation of velocity, and behaves as a first-order filtered estimate of the external joint torque. We discuss threshold selection, the effect of friction, and how the same signal supports isolating the link in contact.</div>
+<div class="cols">
+<h2>I. Introduction</h2>
+<p>Collision handling is usually split into detection, isolation and identification. Detection decides whether a contact occurred at all; isolation finds which link was touched; identification estimates the direction and magnitude of the contact force. All three benefit from a signal that is zero in free motion and that reacts immediately when an external torque appears.</p>
+<p>A direct approach would invert the dynamic model and compare the commanded torque with the torque needed for the measured motion. That requires joint accelerations, which are noisy when obtained by differentiating encoder velocity. The observer presented here avoids this problem by working with momentum instead of acceleration.</p>
+<h2>II. Robot Dynamics</h2>
+<p>Consider a serial manipulator with <i>n</i> rigid joints and configuration <i>q</i>. Its dynamics are</p>
+<div class="eq" data-tex="M(q)\ddot q + C(q,\dot q)\dot q + g(q) = \tau_m + \tau_{\mathrm{ext}} - \tau_F \tag{1}"></div>
+<p>where <i>M</i> is the symmetric positive-definite inertia matrix, <i>C</i> collects Coriolis and centrifugal terms, <i>g</i> is gravity, τ<sub>m</sub> is the motor torque, τ<sub>F</sub> is friction, and τ<sub>ext</sub> is the unknown external torque caused by a collision.</p>
+<p>The generalized momentum of the robot is defined as</p>
+<div class="eq" data-tex="p = M(q)\,\dot q. \tag{2}"></div>
+<p>Using the skew-symmetry of the matrix Ṁ − 2C, the time derivative of the momentum takes a simple form that does not contain the joint acceleration:</p>
+<div class="eq" data-tex="\dot p = \tau_m + \tau_{\mathrm{ext}} - \tau_F + C^{T}(q,\dot q)\,\dot q - g(q). \tag{3}"></div>
+<p>It is convenient to collect the model terms that depend only on position and velocity into a single vector,</p>
+<div class="eq" data-tex="\beta(q,\dot q) = g(q) - C^{T}(q,\dot q)\,\dot q. \tag{4}"></div>
+<h2>III. The Momentum Residual</h2>
+<p>The residual compares the measured momentum with the momentum predicted by integrating the model. With a diagonal gain matrix <i>K</i><sub>O</sub> with positive entries, it is defined as</p>
+<div class="eq" data-tex="r(t) = K_O\left[p(t) - \int_0^t \big(\tau_m - \hat\beta + r\big)\,ds - p(0)\right]. \tag{5}"></div>
+<p>Differentiating (5) and substituting (3) shows that, for an exact model and negligible friction, the residual obeys the stable first-order dynamics</p>
+<div class="eq" data-tex="\dot r = K_O\left(\tau_{\mathrm{ext}} - r\right). \tag{6}"></div>
+<p>Thus each component of the residual is a low-pass filtered copy of the corresponding external joint torque. Larger gains make the response faster but pass more measurement noise. In the limit of very large gains the residual approaches the external torque itself.</p>
+<h2>IV. Detection and Isolation</h2>
+<p>A collision is declared when any component of the residual leaves a band around zero,</p>
+<div class="eq" data-tex="|r_i(t)| > \epsilon_i \quad \text{for some } i. \tag{7}"></div>
+<p>The thresholds ε<sub>i</sub> trade false alarms against sensitivity. They should exceed the residual seen during fast free motion, which is dominated by unmodeled friction and inertia errors.</p>
+<p>Because a contact on link <i>k</i> cannot produce torque at joints beyond <i>k</i>, the last joint whose residual is significantly nonzero indicates the earliest link that may be in contact. This simple rule isolates the collided link without any additional sensors.</p>
+<h2>V. Conclusion</h2>
+<p>The momentum residual offers a practical collision detector: it uses only proprioceptive signals, needs no acceleration estimate, and provides a filtered estimate of the external torque that also supports isolation. Its main limitation is sensitivity to model and friction errors, which sets a lower bound on usable thresholds.</p>
+</div>
+<script>
+document.querySelectorAll('.eq').forEach(e => katex.render(e.dataset.tex, e, {displayMode: true, output: 'html', throwOnError: true}));
+</script>
+</body></html>

@@ -243,7 +243,7 @@ app.post('/api/papers/:id/chats/:cid/messages', async (req, res) => {
   } finally { busy = false; }
 });
 
-if (process.argv.includes('--production')) app.use(express.static(join(root, 'dist')));
+if (process.argv.includes('--production') || process.env.MARGIN_PRODUCTION) app.use(express.static(join(root, 'dist')));
 else { const {createServer} = await import('vite'); const vite = await createServer({root, server: {middlewareMode: true}, appType: 'spa'}); app.use(vite.middlewares); }
 app.use((err, req, res, next) => {
   const status = err.status || err.statusCode || 500;

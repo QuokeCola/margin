@@ -18,10 +18,11 @@ $('#app').innerHTML = `<header><button id="toggle-library" class="icon" title="S
 <section class="chat"><div class="section-head"><div><small id="chat-paper">YOUR STUDY DESK</small><h1 id="chat-title">Read. Question. Understand.</h1></div><button id="new-chat" disabled>New chat</button></div><div id="messages" tabindex="0" aria-label="Conversation"></div><form id="ask"><div id="context" hidden></div><textarea id="question" aria-label="Question about the paper" placeholder="What would you like to understand?" rows="3" maxlength="8000"></textarea><div class="compose-bottom"><span>Enter to send · Ctrl+Enter for a new line. Paper text + this chat are sent to OpenAI.</span><button id="send" type="submit">Ask ↗</button></div></form><p id="notice" role="status">Add a PDF, or pick one from the library.</p></section>
 <section class="reader"><div class="section-head"><div><small>SOURCE DOCUMENT</small><h2 id="filename">Your paper, in context</h2></div></div><div class="toolbar"><label><input id="follow" type="checkbox" checked> Follow chat</label><div><label>Page <input id="page" type="number" min="1" value="1"></label><span id="total">/ —</span><button id="go">Go</button></div><div class="zoom" title="Pinch the trackpad (or Ctrl + scroll) over the page to zoom"><button id="zoom-out" aria-label="Zoom out">−</button><button id="zoom-reset" title="Reset to 100%">100%</button><button id="zoom-in" aria-label="Zoom in">+</button></div></div><div id="pdf"><div class="empty"><div class="paper-icon">∑</div><h2>Make room for the original.</h2><p>Add a PDF from your laptop, or pick a paper from the library.<br>Pinch the trackpad over a page to zoom.</p></div></div><details id="manual"><summary>Find a reference / correct an equation location</summary><div class="manual-grid"><label>Equation <input id="equation" placeholder="61"></label><label>PDF page <input id="map-page" type="number" min="1" value="1"></label><label>Position from top (%) <input id="map-y" type="number" min="0" max="100" value="50"></label><button id="find">Find equation</button><button id="save">Save correction</button><button id="remove">Remove correction</button></div><p>Corrections are saved with this paper in your library. Click the PDF while this panel is open to pick a position. Pages use PDF order, not printed journal numbers.</p></details></section></main>
 <div id="pdf-pop" hidden><button type="button" id="pop-ask">Ask AI ↗</button></div>
+<dialog id="ask-text"><form id="ask-text-form"><h2 id="ask-text-title"></h2><label><input id="ask-text-input" autocomplete="off" maxlength="200"></label><div class="dialog-buttons"><button type="button" id="ask-text-cancel">Cancel</button><button type="submit" class="primary">Save</button></div></form></dialog>
 <dialog id="settings"><form id="settings-form"><h2>Settings</h2>
-<label>OpenAI API key<input id="key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-…"></label><p id="key-hint" class="hint"></p>
+<label>OpenAI API key<input id="key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-…"></label><p id="key-hint" class="hint"></p><ol class="setup-steps"><li>Sign in at <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">platform.openai.com/api-keys</a> and click <b>Create new secret key</b>.</li><li>Add credit under Billing if your account has none; answers are billed per use.</li><li>Paste the key above and click <b>Save</b>.</li></ol><nav class="openai-links" aria-label="OpenAI account pages"><a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">Create an API key ↗</a><a href="https://platform.openai.com/usage" target="_blank" rel="noopener noreferrer">Usage ↗</a><a href="https://platform.openai.com/settings/organization/billing/overview" target="_blank" rel="noopener noreferrer">Billing ↗</a></nav>
 <label>Model<select id="settings-model"></select></label><label>…or type a model ID<input id="custom-model" autocomplete="off" spellcheck="false" placeholder="e.g. gpt-5.2"></label>
-<p class="hint">Saved to <code>.env</code> next to the app (readable only by you) and applied immediately, without a restart. A new key is checked with OpenAI before it is saved.</p>
+<p class="hint">Stored only on this computer, in a file readable only by you, and applied immediately. A new key is checked with OpenAI before it is saved; it is sent only to OpenAI.</p>
 <p id="settings-msg" role="status"></p><div class="dialog-buttons"><button type="button" id="settings-cancel">Cancel</button><button type="submit" id="settings-save" class="primary">Save</button></div></form></dialog>`;
 
 let session = null, models = [], papers = [], paper = null, chat = null;
@@ -101,6 +102,19 @@ $('#settings-form').onsubmit = async e => {
   finally { $('#settings-save').disabled = false; }
 };
 
+// In-app text prompt (window.prompt is unavailable in the desktop app).
+function askText(title, value) {
+  const d = $('#ask-text'), input = $('#ask-text-input');
+  $('#ask-text-title').textContent = title; input.value = value;
+  d.showModal(); input.select();
+  return new Promise(resolve => {
+    const done = v => { d.close(); $('#ask-text-form').onsubmit = $('#ask-text-cancel').onclick = d.oncancel = null; resolve(v); };
+    $('#ask-text-form').onsubmit = e => { e.preventDefault(); done(input.value); };
+    $('#ask-text-cancel').onclick = () => done(null);
+    d.oncancel = () => done(null);
+  });
+}
+
 // ---------- library ----------
 const fmtDate = iso => { const d = new Date(iso), t = new Date(); return d.toDateString() === t.toDateString() ? d.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : d.toLocaleDateString([], {month: 'short', day: 'numeric'}); };
 async function refreshLibrary() { try { papers = await api('/api/papers'); } catch (e) { notice(e.message); } renderLibrary(); }
@@ -127,7 +141,7 @@ function renderLibrary() {
   }));
 }
 async function renamePaper(p) {
-  const name = prompt('Rename paper', p.name); if (!name?.trim()) return;
+  const name = await askText('Rename paper', p.name); if (!name?.trim()) return;
   try { const r = await api(`/api/papers/${p.id}`, {method: 'PATCH', body: {name}}); p.name = r.name; if (paper?.id === p.id) { paper.name = r.name; $('#filename').textContent = r.name; $('#chat-paper').textContent = r.name.toUpperCase(); } renderLibrary(); } catch (e) { notice(e.message); }
 }
 async function deletePaper(p) {
@@ -135,7 +149,7 @@ async function deletePaper(p) {
   try { await api(`/api/papers/${p.id}`, {method: 'DELETE'}); if (paper?.id === p.id) await closePaper(); await refreshLibrary(); notice('Paper removed.'); } catch (e) { notice(e.message); }
 }
 async function renameChat(c) {
-  const title = prompt('Rename chat', c.title); if (!title?.trim()) return;
+  const title = await askText('Rename chat', c.title); if (!title?.trim()) return;
   try { Object.assign(c, await api(`/api/papers/${paper.id}/chats/${c.id}`, {method: 'PATCH', body: {title}})); if (chat?.id === c.id) { chat.title = c.title; $('#chat-title').textContent = c.title; } renderLibrary(); } catch (e) { notice(e.message); }
 }
 async function deleteChat(c) {

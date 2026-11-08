@@ -1,1 +1,105 @@
-{"name":"paper-study","version":"1.0.0","private":true,"type":"module","scripts":{"dev":"node server.mjs","build":"vite build","start":"node server.mjs --production","test":"node --test"},"dependencies":{"dompurify":"^3.2.0","dotenv":"^17.2.0","express":"^5.1.0","katex":"^0.19.1","marked":"^16.3.0","openai":"^6.0.0","pdfjs-dist":"^6.5.438","vite":"^7.1.0"}}
+{
+  "name": "margin",
+  "productName": "Margin",
+  "version": "1.0.0",
+  "description": "Read a paper beside an AI tutor whose citations jump to the exact page and equation.",
+  "homepage": "https://github.com/QuokeCola/margin",
+  "author": {
+    "name": "QuokeCola",
+    "email": "43491767+QuokeCola@users.noreply.github.com"
+  },
+  "private": true,
+  "type": "module",
+  "main": "electron/main.mjs",
+  "scripts": {
+    "dev": "node server.mjs",
+    "build": "vite build",
+    "start": "node server.mjs --production",
+    "test": "node --test",
+    "app": "vite build && electron .",
+    "dist:linux": "vite build && electron-builder --linux",
+    "dist:win": "vite build && electron-builder --win",
+    "dist:mac": "vite build && electron-builder --mac"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.0",
+    "express": "^5.1.0",
+    "openai": "^6.0.0"
+  },
+  "devDependencies": {
+    "dompurify": "^3.2.0",
+    "electron": "^45.2.3",
+    "electron-builder": "^26.18.0",
+    "katex": "^0.19.1",
+    "marked": "^16.3.0",
+    "pdfjs-dist": "^6.5.438",
+    "vite": "^7.1.0"
+  },
+  "build": {
+    "appId": "io.github.quokecola.margin",
+    "productName": "Margin",
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**",
+      "server.mjs",
+      "lib/**",
+      "electron/**",
+      "assets/margin-512.png",
+      "package.json"
+    ],
+    "publish": null,
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "category": "Education",
+      "synopsis": "Study research papers with an AI tutor that cites pages and equations",
+      "syncDesktopName": true
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "category": "public.app-category.education",
+      "identity": null
+    },
+    "afterPack": "build/adhoc-sign.cjs"
+  },
+  "desktopName": "margin.desktop"
+}
