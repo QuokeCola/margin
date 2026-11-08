@@ -207,3 +207,23 @@ dialog[open]::backdrop{animation:fade .26s ease}
 #info-msg{font-size:12px;color:#6f8b74;min-height:16px}
 @media(max-width:800px){.library{max-height:none}}
 #project-delete{visibility:visible}#project-delete:disabled{visibility:hidden}
+
+/* ---------- references ---------- */
+.eq-hover.ref{border-color:#c07a2a;background:#f2a35a1f;border-radius:3px}
+#ref-card{position:fixed;z-index:60;width:min(420px,calc(100vw - 24px));max-height:min(70vh,560px);overflow:auto;background:#fff;border:1px solid #cbd5cc;border-radius:12px;box-shadow:0 14px 40px #1a2b2833;padding:12px 14px;animation:pop .18s var(--ease-out)}
+#ref-card[hidden],#drop-zone[hidden]{display:none}
+.ref-item+.ref-item{border-top:1px solid #e3e9de;margin-top:10px;padding-top:10px}
+.ref-head{display:flex;gap:8px;align-items:baseline}
+.ref-num{font-size:11px;color:#c07a2a;font-weight:600;flex:none}
+.ref-title{font:15px/1.35 Georgia,serif;color:#203c39}
+.ref-raw{font-size:12px;line-height:1.5;color:#40584c}
+.ref-meta{font-size:11.5px;color:#6f8b74;margin-top:3px;padding-left:2px}
+.ref-abstract{font-size:12px;line-height:1.55;color:#40584c;margin:8px 0 0}
+.ref-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:9px}
+.small-link{font-size:11px;color:#2f584a}
+.ref-list{margin-top:6px}
+.ref-rows{list-style:none;padding:0;margin:0}
+.ref-rows li{display:grid;grid-template-columns:34px 1fr auto;gap:8px;align-items:start;padding:7px 0;border-top:1px solid #edf1e8}
+.ref-rows .ref-title{font-size:13px}
+#drop-zone{position:fixed;inset:0;z-index:80;background:#1a2b2840;display:grid;place-items:center;pointer-events:none;animation:fade .15s ease}
+#drop-zone div{background:#fff;border:2px dashed #5c8f6f;border-radius:16px;padding:28px 40px;font:20px Georgia,serif;color:#2f584a}

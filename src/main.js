@@ -7,6 +7,7 @@ import 'katex/dist/katex.min.css';
 import './style.css';
 import {parseReferences, resolveReference, TOKEN, tokenRef, findMentions, tagOf, QUOTE, ANCHOR} from './references.js';
 import {findQuote, textBoxes, detectEquations} from './layout.js';
+import {parseBibliography, findMarkers, matchEntries} from './bib.js';
 import {clampZoom, wheelZoomFactor} from './zoom.js';
 pdfjs.GlobalWorkerOptions.workerSrc = worker;
 const $ = s => document.querySelector(s);
@@ -19,18 +20,22 @@ $('#app').innerHTML = `<header><button id="toggle-library" class="icon" title="S
 <div class="lib-section"><div class="lib-head"><small>CHATS</small><button id="new-chat-side" class="small" title="New chat about the open paper">+ New</button></div><ul id="chats" aria-label="Chats"></ul></div></aside>
 <section class="chat"><div class="section-head"><div><small id="chat-paper">YOUR STUDY DESK</small><h1 id="chat-title">Read. Question. Understand.</h1></div><button id="new-chat" disabled>New chat</button></div><div id="messages" tabindex="0" aria-label="Conversation"></div><form id="ask"><div id="context" hidden></div><textarea id="question" aria-label="Question about the paper" placeholder="What would you like to understand?" rows="3" maxlength="8000"></textarea><div class="compose-bottom"><span>Enter to send · Ctrl+Enter for a new line. Paper text + this chat are sent to OpenAI.</span><button id="send" type="submit">Ask ↗</button></div></form><p id="notice" role="status">Add a PDF, or pick one from the library.</p></section>
 <section class="reader"><div class="section-head"><div><small>SOURCE DOCUMENT</small><h2 id="filename">Your paper, in context</h2><p id="paper-byline"></p></div><button id="paper-info" class="small" disabled title="Paper details: authors, venue, DOI, abstract">ⓘ Info</button></div><div class="toolbar"><label><input id="follow" type="checkbox" checked> Follow chat</label><div><label>Page <input id="page" type="number" min="1" value="1"></label><span id="total">/ —</span><button id="go">Go</button></div><button id="marker" title="Marker: drag a box over any part of the page to ask about it (Esc to cancel)" aria-pressed="false">✎ Mark</button><div class="zoom" title="Pinch the trackpad (or Ctrl + scroll) over the page to zoom"><button id="zoom-out" aria-label="Zoom out">−</button><button id="zoom-reset" title="Reset to 100%">100%</button><button id="zoom-in" aria-label="Zoom in">+</button></div></div><div id="pdf"><div class="empty"><div class="paper-icon">∑</div><h2>Make room for the original.</h2><p>Add a PDF from your laptop, or pick a paper from the library.<br>Pinch the trackpad over a page to zoom.</p></div></div><details id="manual"><summary>Find a reference / correct an equation location</summary><div class="manual-grid"><label>Equation <input id="equation" placeholder="61"></label><label>PDF page <input id="map-page" type="number" min="1" value="1"></label><label>Position from top (%) <input id="map-y" type="number" min="0" max="100" value="50"></label><button id="find">Find equation</button><button id="save">Save correction</button><button id="remove">Remove correction</button></div><p>Corrections are saved with this paper in your library. Click the PDF while this panel is open to pick a position. Pages use PDF order, not printed journal numbers.</p></details></section></main>
+<div id="ref-card" hidden role="dialog" aria-label="Reference"></div>
+<div id="drop-zone" hidden><div>Drop the PDF to add it to the project</div></div>
 <div id="pdf-pop" hidden><button type="button" id="pop-ask">Ask AI ↗</button></div>
 <dialog id="ask-text"><form id="ask-text-form"><h2 id="ask-text-title"></h2><label><input id="ask-text-input" autocomplete="off" maxlength="200"></label><div class="dialog-buttons"><button type="button" id="ask-text-cancel">Cancel</button><button type="submit" class="primary">Save</button></div></form></dialog>
 <dialog id="info"><div class="info-body"><div id="info-content"></div><div class="info-lookup"><label>DOI<input id="info-doi" placeholder="10.1109/…" autocomplete="off" spellcheck="false"></label><button type="button" id="info-lookup">Look up</button></div><p id="info-msg" role="status"></p><div class="dialog-buttons"><button type="button" id="info-close" class="primary">Close</button></div></div></dialog>
 <dialog id="settings"><form id="settings-form"><h2>Settings</h2>
 <label>OpenAI API key<input id="key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-…"></label><p id="key-hint" class="hint"></p><ol class="setup-steps"><li>Sign in at <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">platform.openai.com/api-keys</a> and click <b>Create new secret key</b>.</li><li>Add credit under Billing if your account has none; answers are billed per use.</li><li>Paste the key above and click <b>Save</b>.</li></ol><nav class="openai-links" aria-label="OpenAI account pages"><a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">Create an API key ↗</a><a href="https://platform.openai.com/usage" target="_blank" rel="noopener noreferrer">Usage ↗</a><a href="https://platform.openai.com/settings/organization/billing/overview" target="_blank" rel="noopener noreferrer">Billing ↗</a></nav>
+<label>Library proxy prefix (optional)<input id="proxy-prefix" autocomplete="off" spellcheck="false" placeholder="https://proxy.lib.your-university.edu/login?url="></label><p class="hint">Used by “Get PDF” in the desktop app to open papers through your library’s sign-in. Ask your library for its proxy link prefix (EZproxy “login?url=” style).</p>
 <label>Model<select id="settings-model"></select></label><label>…or type a model ID<input id="custom-model" autocomplete="off" spellcheck="false" placeholder="e.g. gpt-5.2"></label>
 <p class="hint">Stored only on this computer, in a file readable only by you, and applied immediately. A new key is checked with OpenAI before it is saved; it is sent only to OpenAI.</p>
 <p id="settings-msg" role="status"></p><div class="dialog-buttons"><button type="button" id="settings-cancel">Cancel</button><button type="submit" id="settings-save" class="primary">Save</button></div></form></dialog>`;
 
 let session = null, models = [], projects = [], project = null, paper = null, chat = null; // project: {id, name, papers, chats}
 let doc = null, pages = [], index = {}, overrides = {};
-let pageBoxes = {}, eqByPage = {}, context = null; // text-item geometry and detected equations per page; pending attachment
+let pageBoxes = {}, eqByPage = {}, context = null;
+let bib = {start: null, entries: new Map()}, refHits = {}, refRecords = [], refByNum = new Map(), refsState = 'idle'; // references of the open paper // text-item geometry and detected equations per page; pending attachment
 let working = false, loading = false, generation = 0, activeRef = null, renderQueue = Promise.resolve();
 let zoom = 1;
 try { zoom = clampZoom(Number(localStorage.getItem('margin-zoom')) || 1); } catch {}
@@ -81,7 +86,7 @@ $('#model').onchange = async e => {
   catch (err) { notice(err.message); showStatus(); }
 };
 $('#open-settings').onclick = () => {
-  $('#key').value = ''; $('#custom-model').value = ''; $('#settings-msg').textContent = '';
+  $('#key').value = ''; $('#custom-model').value = ''; $('#settings-msg').textContent = ''; $('#proxy-prefix').value = session?.proxyPrefix || '';
   $('#key-hint').textContent = session?.configured ? `A key is saved (${session.keyHint}). Leave blank to keep it.` : 'No key saved yet.';
   const ids = [...new Set([session?.model, ...models].filter(Boolean))];
   $('#settings-model').replaceChildren(...ids.map(id => h('option', {value: id, textContent: id, selected: id === session?.model})));
@@ -92,6 +97,7 @@ $('#settings-form').onsubmit = async e => {
   e.preventDefault();
   const key = $('#key').value.trim(), custom = $('#custom-model').value.trim(), picked = $('#settings-model').value;
   const body = {}; if (key) body.apiKey = key;
+  const proxy = $('#proxy-prefix').value.trim(); if (proxy !== (session?.proxyPrefix || '')) body.proxyPrefix = proxy;
   const m = custom || picked; if (m && m !== session?.model) body.model = m;
   if (!Object.keys(body).length) { $('#settings').close(); return; }
   $('#settings-save').disabled = true; $('#settings-msg').textContent = key ? 'Checking the key with OpenAI…' : 'Saving…';
@@ -100,7 +106,7 @@ $('#settings-form').onsubmit = async e => {
     await saveSettings(body);
     $('#key').value = '';
     $('#settings').close();
-    notice(key ? 'API key saved.' : `Model set to ${session.model}.`);
+    notice(key ? 'API key saved.' : body.model ? `Model set to ${session.model}.` : 'Settings saved.');
     if (key || !hadKey) await loadModels();
   } catch (err) { $('#settings-msg').textContent = err.message; }
   finally { $('#settings-save').disabled = false; }
@@ -250,7 +256,7 @@ async function lookupMetadata({doi, quiet = false} = {}) {
     const r = await api(`/api/papers/${id}/metadata`, {body: doi ? {doi} : lookupHints()});
     if (paper?.id !== id) return;
     Object.assign(paper, {meta: r.meta, metaLookup: r.metaLookup, name: r.name});
-    showPaperHeader(); await refreshProject();
+    showPaperHeader(); await refreshProject(); loadReferences();
     if (!quiet) notice(`Details found: ${byline(r.meta) || r.meta.title}.`);
     return true;
   } catch (e) { if (!quiet) notice(e.message); return false; }
@@ -270,7 +276,21 @@ function renderInfo() {
     h('dl', {}, ...rows.flatMap(([k, v]) => [h('dt', {textContent: k}), h('dd', {textContent: v})])),
     h('nav', {className: 'info-links'}, ...[m.doi && link(`https://doi.org/${m.doi}`, `doi.org/${m.doi} ↗`), m.openalexId && link(`https://openalex.org/${m.openalexId}`, 'OpenAlex ↗'), (m.pdfUrl || m.oaUrl) && link(m.pdfUrl || m.oaUrl, 'Open-access copy ↗')].filter(Boolean)),
     ...(m.abstract ? [h('h3', {textContent: 'Abstract'}), h('p', {className: 'abstract', textContent: m.abstract})] : []),
-    h('p', {className: 'hint', textContent: `Source: ${m.source === 'crossref' ? 'Crossref' : 'OpenAlex'}, retrieved ${fmtDate(m.fetchedAt)}.`}));
+    h('p', {className: 'hint', textContent: `Source: ${m.source === 'crossref' ? 'Crossref' : 'OpenAlex'}, retrieved ${fmtDate(m.fetchedAt)}.`}),
+    refList());
+}
+// References of the open paper, in bibliography order when the entries could be matched.
+function refList() {
+  const wrap = h('div', {className: 'ref-list'}, h('h3', {textContent: `References${refRecords.length ? ` (${refRecords.length})` : ''}`}));
+  if (refsState !== 'ready') { wrap.append(h('p', {className: 'hint', textContent: refsState === 'loading' ? 'Loading…' : 'Not loaded yet.'})); return wrap; }
+  const numbered = [...refByNum].sort((a, b) => a[0] - b[0]), seen = new Set(numbered.map(([, r]) => r));
+  const rows = [...numbered.map(([n, r]) => [n, r]), ...refRecords.filter(r => !seen.has(r)).map(r => [null, r])];
+  wrap.append(h('ol', {className: 'ref-rows'}, ...rows.map(([n, r]) => {
+    const have = inProject(r);
+    return h('li', {}, h('span', {className: 'ref-num', textContent: n ? `[${n}]` : '·'}), h('div', {}, h('div', {className: 'ref-title', textContent: r.title || '(untitled)'}), h('div', {className: 'ref-meta', textContent: [authorsShort(r), r.year].filter(Boolean).join(' · ')})),
+      have ? h('button', {className: 'small', textContent: 'Open', onclick: () => { $('#info').close(); openPaper(have.id); }}) : h('button', {className: 'small', textContent: 'Add', onclick: e => getPdf(r, e.target)}));
+  })));
+  return wrap;
 }
 $('#paper-info').onclick = () => { $('#info-msg').textContent = ''; renderInfo(); $('#info').showModal(); };
 $('#info-close').onclick = () => $('#info').close();
@@ -297,7 +317,8 @@ async function closePaper() {
   generation++;
   await renderQueue.catch(() => {});
   await destroyDoc();
-  doc = null; paper = null; chat = null; pages = []; index = {}; overrides = {}; activeRef = null; pageBoxes = {}; eqByPage = {}; setContext(null); hidePop(); setMarking(false);
+  doc = null; paper = null; chat = null; pages = []; index = {}; overrides = {}; activeRef = null; pageBoxes = {}; eqByPage = {}; setContext(null); hidePop(); setMarking(false); hideRefCard();
+  bib = {start: null, entries: new Map()}; refHits = {}; refRecords = []; refByNum = new Map(); refsState = 'idle';
   $('#pdf').replaceChildren(h('div', {className: 'empty', innerHTML: '<div class="paper-icon">∑</div><h2>Make room for the original.</h2><p>Add a PDF from your laptop, or pick a paper from the library.</p>'}));
   $('#total').textContent = '/ —';
   showWelcome(); controls(); renderLibrary();
@@ -359,7 +380,7 @@ async function openPaper(id, bytes, chatId) {
     const mine = project.chats.filter(c => c.paperId === id), pick = mine.find(c => c.id === chatId) || mine[0];
     if (pick) showChat(await api(pathP('chats', pick.id))); else { loading = false; await newChat(); }
     notice(`Ready · ${pages.length} pages · ${Object.keys(index).length} detected equations. ${pages.every(p => !p.text.trim()) ? 'No text detected: OCR this PDF before asking questions.' : ''}`);
-    maybeLookup();
+    indexReferences(); if (paper.meta) loadReferences(); else maybeLookup();
   } catch (err) { await destroyDoc(); notice('Could not open PDF: ' + err.message); }
   finally { loading = false; controls(); renderLibrary(); }
 }
@@ -632,8 +653,10 @@ $('#remove').onclick = async () => { if (!paper) return; delete overrides[$('#eq
 function pageHit(e) {
   const el = e.target.closest?.('.pdf-page'); if (!el) return null;
   const r = el.getBoundingClientRect(), u = (e.clientX - r.left) / r.width, v = (e.clientY - r.top) / r.height;
-  const eq = (eqByPage[el.dataset.page] || []).find(q => u >= q.box.x0 && u <= q.box.x1 && v >= q.box.y0 && v <= q.box.y1);
-  return {el, u, v, eq};
+  const inside = b => u >= b.x0 && u <= b.x1 && v >= b.y0 && v <= b.y1;
+  const ref = (refHits[el.dataset.page] || []).find(q => inside(q.box));
+  const eq = ref ? null : (eqByPage[el.dataset.page] || []).find(q => inside(q.box));
+  return {el, u, v, eq, ref};
 }
 let popAction = null;
 function showPop(x, y, label, action) {
@@ -657,6 +680,7 @@ $('#pdf').addEventListener('mouseup', e => {
     const el = sel.anchorNode?.parentElement?.closest('.pdf-page');
     if (sel.isCollapsed || text.length < 2 || !el) {
       const hit = pageHit(e);
+      if (hit?.ref) { showRefCard(hit.ref.nums, e.clientX, e.clientY); return; }
       if (hit?.eq) showPop(e.clientX, e.clientY, `Ask AI about Eq. (${hit.eq.label}) ↗`, () => attachEquation(hit.eq));
       return;
     }
@@ -675,11 +699,11 @@ $('#pdf').addEventListener('mousemove', e => {
   hoverFrame = requestAnimationFrame(() => {
     hoverFrame = 0;
     const hit = $('#manual').open || marking || e.buttons ? null : pageHit(e);
-    const old = document.querySelector('.eq-hover');
-    if (!hit?.eq) { old?.remove(); document.querySelectorAll('.eq-hot').forEach(x => x.classList.remove('eq-hot')); return; }
-    if (old?.eq === hit.eq) return;
+    const old = document.querySelector('.eq-hover'), target = hit?.ref || hit?.eq;
+    if (!target) { old?.remove(); document.querySelectorAll('.eq-hot').forEach(x => x.classList.remove('eq-hot')); return; }
+    if (old?.eq === target) return;
     old?.remove();
-    const d = h('div', {className: 'eq-hover', title: `Eq. (${hit.eq.label}) · click to ask about it`}); d.eq = hit.eq; placeBox(d, hit.eq.box);
+    const d = h('div', {className: 'eq-hover' + (hit.ref ? ' ref' : ''), title: hit.ref ? `Reference ${hit.ref.nums.map(n => `[${n}]`).join(' ')} · click for details` : `Eq. (${hit.eq.label}) · click to ask about it`}); d.eq = target; placeBox(d, target.box);
     hit.el.append(d); hit.el.classList.add('eq-hot');
   });
 });
@@ -730,6 +754,143 @@ function textInBox(pageNum, b) {
   inside.sort((a, c) => Math.abs(a.y0 - c.y0) > 3 ? a.y0 - c.y0 : a.x0 - c.x0);
   return inside.map(t => t.s).join(' ').replace(/\s+/g, ' ').trim().slice(0, 1500);
 }
+
+// ---------- references: [n] markers, cards, getting cited papers ----------
+// Bibliography and in-text markers from the extracted text (works offline); OpenAlex records are
+// matched in later, when the paper's details are known.
+function indexReferences() {
+  bib = parseBibliography(pages); refHits = {};
+  if (!bib.entries.size) return;
+  for (const n of Object.keys(pageBoxes).map(Number)) {
+    if (bib.start && n > bib.start.page) break;
+    const el = $(`.pdf-page[data-page="${n}"]`), W = Number(el.dataset.width), H = Number(el.dataset.height);
+    // On the page where the list starts, ignore everything from the heading down.
+    const stopY = bib.start && n === bib.start.page ? (pageBoxes[n].find(b => /^\s*(references|bibliography)\s*$/i.test(b.s))?.y0 ?? Infinity) : Infinity;
+    for (const b of pageBoxes[n]) {
+      if (b.y0 >= stopY) continue;
+      for (const m of findMarkers(b.s)) {
+        const nums = m.nums.filter(k => bib.entries.has(k)); if (!nums.length) continue;
+        const w = b.x1 - b.x0, len = Math.max(1, b.s.length);
+        (refHits[n] ??= []).push({nums, box: {x0: (b.x0 + w * m.index / len) / W, x1: (b.x0 + w * (m.index + m.length) / len) / W, y0: b.y0 / H, y1: b.y1 / H}});
+      }
+    }
+  }
+}
+async function loadReferences() {
+  if (!paper?.meta || refsState === 'loading') return;
+  const id = paper.id; refsState = 'loading';
+  try {
+    const r = await api(`/api/papers/${id}/references`);
+    if (paper?.id !== id) return;
+    refRecords = r.items || []; refByNum = matchEntries(bib.entries, refRecords); refsState = 'ready';
+  } catch { if (paper?.id === id) refsState = 'failed'; }
+}
+const inProject = rec => project?.papers.find(p => p.meta && ((rec.openalexId && p.meta.openalexId === rec.openalexId) || (rec.doi && p.meta.doi === rec.doi)));
+const authorsShort = rec => !rec.authors?.length ? '' : rec.authors.slice(0, 3).join(', ') + ((rec.authorCount ?? rec.authors.length) > 3 ? ' et al.' : '');
+
+function hideRefCard() { const c = $('#ref-card'); if (c) { c.hidden = true; c.replaceChildren(); } }
+document.addEventListener('mousedown', e => { if (!e.target.closest('#ref-card')) hideRefCard(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') hideRefCard(); });
+$('#pdf').addEventListener('scroll', hideRefCard, {passive: true});
+
+function showRefCard(nums, x, y) {
+  const card = $('#ref-card');
+  card.replaceChildren(...nums.slice(0, 6).map(n => refItem(n, nums.length === 1)));
+  if (nums.length > 6) card.append(h('p', {className: 'hint', textContent: `…and ${nums.length - 6} more.`}));
+  card.hidden = false;
+  const w = card.offsetWidth, ht = card.offsetHeight;
+  card.style.left = Math.min(innerWidth - w - 12, Math.max(12, x - w / 2)) + 'px';
+  card.style.top = (y + ht + 16 > innerHeight ? Math.max(12, y - ht - 12) : y + 14) + 'px';
+}
+// One reference: the matched OpenAlex record if there is one, otherwise the bibliography text.
+function refItem(n, open) {
+  const rec = refByNum.get(n), raw = bib.entries.get(n) || '';
+  const item = h('div', {className: 'ref-item'});
+  const head = h('div', {className: 'ref-head'}, h('span', {className: 'ref-num', textContent: `[${n}]`}));
+  if (!rec) {
+    head.append(h('span', {className: 'ref-raw', textContent: raw.slice(0, 260) + (raw.length > 260 ? '…' : '')}));
+    item.append(head);
+    const status = refsState === 'loading' ? 'Looking up details…' : !paper?.meta ? 'Paper details not found yet (ⓘ Info), so references are not linked.' : 'Not linked to a record automatically.';
+    const find = h('button', {className: 'small', textContent: 'Find this paper', onclick: async () => {
+      find.disabled = true; find.textContent = 'Searching…';
+      try {
+        const {items} = await api('/api/works/search', {body: {q: raw.slice(0, 300)}});
+        if (!items.length) { find.textContent = 'Nothing found'; return; }
+        refByNum.set(n, items[0]); item.replaceWith(refItem(n, true));
+      } catch (e) { find.textContent = 'Search failed'; notice(e.message); }
+    }});
+    item.append(h('div', {className: 'ref-actions'}, h('small', {className: 'hint', textContent: status}), raw.length > 20 ? find : ''));
+    return item;
+  }
+  head.append(h('span', {className: 'ref-title', textContent: rec.title || raw.slice(0, 120)}));
+  item.append(head, h('div', {className: 'ref-meta', textContent: [authorsShort(rec), rec.year, rec.venue].filter(Boolean).join(' · ')}));
+  if (rec.citedBy != null) item.append(h('div', {className: 'ref-meta', textContent: `Cited by ${rec.citedBy}`}));
+  if (open && rec.abstract) item.append(h('p', {className: 'ref-abstract', textContent: rec.abstract.slice(0, 420) + (rec.abstract.length > 420 ? '…' : '')}));
+  const have = inProject(rec), actions = h('div', {className: 'ref-actions'});
+  if (have) actions.append(h('button', {className: 'small primary', textContent: 'Open in Margin', onclick: () => { hideRefCard(); openPaper(have.id); }}));
+  else actions.append(h('button', {className: 'small primary', textContent: 'Add to project', title: 'Downloads an open-access copy if there is one; otherwise opens the publisher page to sign in', onclick: e => getPdf(rec, e.target)}));
+  if (rec.doi) actions.append(h('a', {className: 'small-link', href: `https://doi.org/${rec.doi}`, target: '_blank', rel: 'noopener noreferrer', textContent: 'DOI ↗'}));
+  item.append(actions);
+  return item;
+}
+
+// Get a cited paper into the project: open-access copy, then (desktop) the sign-in window,
+// then (browser) the publisher page plus drag-and-drop.
+let pendingRef = null;
+async function getPdf(rec, button) {
+  const label = button?.textContent; const busy = t => { if (button) { button.disabled = true; button.textContent = t; } };
+  const done = () => { if (button) { button.disabled = false; button.textContent = label; } };
+  const added = async (summary, how) => {
+    await refreshProject(); refreshProjects(); hideRefCard();
+    notice(`Added “${(summary.meta?.title || summary.name).slice(0, 80)}” to ${project.name} (${how}). It is in the sidebar.`);
+  };
+  for (const url of [rec.pdfUrl, rec.oaUrl].filter(Boolean)) {
+    busy('Downloading…');
+    try { await added(await api(pathP('papers', 'from-url'), {body: {url, openalexId: rec.openalexId, doi: rec.doi}}), 'open-access copy'); return; } catch {}
+  }
+  const landing = rec.doi ? `https://doi.org/${rec.doi}` : rec.oaUrl || (rec.openalexId ? `https://openalex.org/${rec.openalexId}` : null);
+  if (!landing) { done(); notice('No link is known for this paper.'); return; }
+  if (window.marginDesktop) {
+    const url = (session?.proxyPrefix || '') + landing;
+    busy('Waiting for sign-in…');
+    notice('Sign in in the window that opened and download the PDF there; Margin adds it automatically. Close the window to cancel.');
+    const r = await window.marginDesktop.fetchWithLogin(url, rec.title || '');
+    done();
+    if (!r?.ok) { notice(r?.reason === 'closed' ? 'Sign-in window closed; nothing was added.' : r?.reason || 'No PDF was downloaded.'); return; }
+    try {
+      const summary = await api(pathP('papers'), {body: r.bytes, headers: {'Content-Type': 'application/pdf', 'X-Filename': encodeURIComponent(r.filename || 'paper.pdf')}});
+      await api(`/api/papers/${summary.id}/metadata`, {body: rec.openalexId ? {openalexId: rec.openalexId} : {doi: rec.doi}}).catch(() => {});
+      await added(summary, 'signed-in download');
+    } catch (e) { notice('Could not add the downloaded PDF: ' + e.message); }
+    return;
+  }
+  done();
+  pendingRef = {rec, at: Date.now()};
+  window.open(landing, '_blank', 'noopener');
+  notice('No open-access copy. The publisher page opened in a new tab: download the PDF there, then drag it onto Margin.');
+}
+
+// Drag a PDF anywhere onto Margin to add it to the current project.
+let dragDepth = 0;
+const hasFiles = e => [...(e.dataTransfer?.types || [])].includes('Files');
+window.addEventListener('dragenter', e => { if (!hasFiles(e) || !project) return; dragDepth++; $('#drop-zone').hidden = false; });
+window.addEventListener('dragleave', e => { if (!hasFiles(e)) return; if (--dragDepth <= 0) { dragDepth = 0; $('#drop-zone').hidden = true; } });
+window.addEventListener('dragover', e => { if (hasFiles(e)) e.preventDefault(); });
+window.addEventListener('drop', async e => {
+  if (!hasFiles(e)) return;
+  e.preventDefault(); dragDepth = 0; $('#drop-zone').hidden = true;
+  const file = [...e.dataTransfer.files].find(f => f.type === 'application/pdf' || /\.pdf$/i.test(f.name));
+  if (!file || !project || working || loading) { if (!file) notice('Only PDF files can be added.'); return; }
+  if (file.size > 60 * 1024 * 1024) { notice('Choose a PDF smaller than 60 MB.'); return; }
+  try {
+    const summary = await api(pathP('papers'), {body: new Uint8Array(await file.arrayBuffer()), headers: {'Content-Type': 'application/pdf', 'X-Filename': encodeURIComponent(file.name)}});
+    // A PDF dropped soon after "Add to project" is taken to be that reference.
+    const ref = pendingRef && Date.now() - pendingRef.at < 30 * 60e3 ? pendingRef.rec : null; pendingRef = null;
+    if (ref) await api(`/api/papers/${summary.id}/metadata`, {body: ref.openalexId ? {openalexId: ref.openalexId} : {doi: ref.doi}}).catch(() => {});
+    await refreshProject(); refreshProjects();
+    notice(`Added “${file.name}” to ${project.name}. Open it from the sidebar.`);
+  } catch (err) { notice('Could not add PDF: ' + err.message); }
+});
 
 // ---------- marker: drag a box over any area of the page ----------
 let marking = false, draft = null, markedAt = 0;

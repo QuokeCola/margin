@@ -1,5 +1,8 @@
 // Desktop shell: runs Margin's local server inside the app and shows it in a window.
-import {app, BrowserWindow, shell} from 'electron';
+import {app, BrowserWindow, shell, ipcMain, session} from 'electron';
+import {readFile, rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {randomBytes} from 'node:crypto';
 import {createServer} from 'node:net';
 import {dirname, join} from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
@@ -40,7 +43,7 @@ app.whenReady().then(async () => {
   win = new BrowserWindow({
     width: 1440, height: 900, minWidth: 960, minHeight: 600, title: 'Margin', backgroundColor: '#f8f8f3',
     icon: join(root, 'assets', 'margin-512.png'), autoHideMenuBar: true, show: false,
-    webPreferences: {contextIsolation: true, sandbox: true, nodeIntegration: false, spellcheck: true}
+    webPreferences: {contextIsolation: true, sandbox: true, nodeIntegration: false, spellcheck: true, preload: join(root, 'electron', 'preload.cjs')}
   });
   win.once('ready-to-show', () => win.show());
   // Links in answers open in the system browser; the window never leaves the local app.
@@ -48,3 +51,51 @@ app.whenReady().then(async () => {
   win.webContents.on('will-navigate', (e, url) => { if (!url.startsWith(origin)) { e.preventDefault(); if (/^https?:\/\//.test(url)) shell.openExternal(url); } });
   await win.loadURL(origin + '/');
 }).catch(err => { console.error(err); app.exit(1); });
+
+// ---------- sign-in window for publisher PDFs ----------
+// Publisher pages open in their own persistent session (so library/SSO logins are remembered),
+// separate from Margin's window. The first PDF that downloads there is handed back to Margin.
+let signIn = null;
+ipcMain.handle('margin:fetch-with-login', async (event, url, title) => {
+  if (!/^https?:\/\//i.test(url)) return {ok: false, reason: 'Not a web address.'};
+  if (signIn) { signIn.win.focus(); return {ok: false, reason: 'A sign-in window is already open.'}; }
+  const ses = session.fromPartition('persist:library');
+  return new Promise(resolve => {
+    const win = new BrowserWindow({width: 1100, height: 860, parent: BrowserWindow.fromWebContents(event.sender) ?? undefined, autoHideMenuBar: true,
+      title: `Sign in and download the PDF${title ? ' — ' + title.slice(0, 80) : ''}`,
+      webPreferences: {session: ses, contextIsolation: true, sandbox: true, nodeIntegration: false}});
+    let done = false;
+    const finish = result => {
+      if (done) return; done = true; ses.removeListener('will-download', onDownload); ses.webRequest.onHeadersReceived(null); signIn = null;
+      if (!win.isDestroyed()) win.close();
+      resolve(result);
+    };
+    const onDownload = (_e, item) => {
+      const file = join(tmpdir(), `margin-${randomBytes(6).toString('hex')}.pdf`);
+      item.setSavePath(file);
+      item.once('done', async (_e2, state) => {
+        if (state !== 'completed') return; // cancelled: keep the window open for another try
+        const bytes = await readFile(file).catch(() => null); await rm(file, {force: true});
+        if (!bytes || bytes.subarray(0, 5).toString() !== '%PDF-') { win.setTitle('That download was not a PDF. Try the PDF link or button on the page.'); return; }
+        finish({ok: true, bytes: new Uint8Array(bytes), filename: item.getFilename()});
+      });
+    };
+    ses.on('will-download', onDownload);
+    // Electron shows PDFs in its built-in viewer instead of downloading them. When a page or frame in
+    // this window receives a PDF, request the same URL as a download (same session, so the sign-in applies).
+    const asked = new Set();
+    ses.webRequest.onHeadersReceived((details, callback) => {
+      callback({});
+      const type = Object.entries(details.responseHeaders || {}).find(([k]) => k.toLowerCase() === 'content-type')?.[1]?.[0] || '';
+      if (!done && /pdf/i.test(type) && /^(mainFrame|subFrame)$/.test(details.resourceType) && !asked.has(details.url) && !win.isDestroyed()) {
+        asked.add(details.url); win.webContents.downloadURL(details.url);
+      }
+    });
+    // Pop-ups from login flows stay in the same session; downloads from them are caught too.
+    win.webContents.setWindowOpenHandler(() => ({action: 'allow', overrideBrowserWindowOptions: {autoHideMenuBar: true, webPreferences: {session: ses, contextIsolation: true, sandbox: true}}}));
+    win.on('closed', () => finish({ok: false, reason: 'closed'}));
+    win.on('page-title-updated', e => e.preventDefault()); // keep the instruction in the title bar
+    signIn = {win};
+    win.loadURL(url).catch(() => {});
+  });
+});

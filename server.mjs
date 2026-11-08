@@ -8,7 +8,7 @@ import {homedir} from 'node:os';
 import {mkdir, readFile, writeFile, rename, readdir, rm, stat} from 'node:fs/promises';
 import {KEY_PATTERN, MODEL_PATTERN, PAPER_ID, CHAT_ID, updateEnvText, isTextModel, keyHint, cleanName, chatTitle} from './lib/config.mjs';
 import {createStore, PROJECT_ID} from './lib/store.mjs';
-import {lookupPaper, cleanDoi} from './lib/metadata.mjs';
+import {lookupPaper, cleanDoi, worksById, searchWorks, workById} from './lib/metadata.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const ENV_FILE = process.env.MARGIN_ENV_FILE || join(root, '.env');
@@ -26,7 +26,7 @@ app.use((req, res, next) => {
   next();
 });
 
-app.get('/api/status', (_, res) => res.json({configured: !!process.env.OPENAI_API_KEY, model: model(), keyHint: keyHint(process.env.OPENAI_API_KEY), token}));
+app.get('/api/status', (_, res) => res.json({configured: !!process.env.OPENAI_API_KEY, model: model(), keyHint: keyHint(process.env.OPENAI_API_KEY), proxyPrefix: process.env.MARGIN_PROXY_PREFIX || '', token}));
 
 // Every other API route needs the per-launch session token.
 app.use('/api', (req, res, next) => {
@@ -78,8 +78,14 @@ app.get('/api/models', async (_, res) => {
 });
 
 app.post('/api/settings', async (req, res) => {
-  const {apiKey, model: newModel} = req.body || {};
+  const {apiKey, model: newModel, proxyPrefix} = req.body || {};
   const updates = {};
+  // Library proxy prefix for signing in to publishers, e.g. https://proxy.lib.example.edu/login?url=
+  if (proxyPrefix !== undefined) {
+    const v = String(proxyPrefix).trim();
+    if (v && (!/^https:\/\/[^\s"'<>]+$/.test(v) || v.length > 300)) return res.status(400).json({error: 'The proxy prefix must be an https:// address.'});
+    updates.MARGIN_PROXY_PREFIX = v;
+  }
   if (apiKey !== undefined && apiKey !== '') {
     if (typeof apiKey !== 'string' || !KEY_PATTERN.test(apiKey.trim())) return res.status(400).json({error: 'That does not look like an API key.'});
     const key = apiKey.trim();
@@ -98,7 +104,7 @@ app.post('/api/settings', async (req, res) => {
   const text = await readFile(ENV_FILE, 'utf8').catch(() => '');
   await writeAtomic(ENV_FILE, updateEnvText(text, updates));
   Object.assign(process.env, updates);
-  res.json({configured: !!process.env.OPENAI_API_KEY, model: model(), keyHint: keyHint(process.env.OPENAI_API_KEY)});
+  res.json({configured: !!process.env.OPENAI_API_KEY, model: model(), keyHint: keyHint(process.env.OPENAI_API_KEY), proxyPrefix: process.env.MARGIN_PROXY_PREFIX || ''});
 });
 
 // ---------- projects ----------
@@ -174,13 +180,13 @@ app.post('/api/papers/:id/metadata', async (req, res) => {
   if (!ids(req, res)) return;
   const p = await store.loadPaper(req.params.id);
   if (!p) return res.status(404).json({error: 'Paper not found.'});
-  const {doi, dois, title} = req.body || {};
+  const {doi, dois, title, openalexId} = req.body || {};
   const candidates = [doi, ...(Array.isArray(dois) ? dois.slice(0, 5) : [])].map(cleanDoi).filter(Boolean);
   if (doi !== undefined && doi !== null && doi !== '' && !cleanDoi(doi)) return res.status(400).json({error: 'That does not look like a DOI (it starts with 10.).'});
   try {
-    let meta = null;
-    for (const d of [...new Set(candidates)]) if ((meta = await lookupPaper({doi: d}))) break;
-    if (!meta && !doi && typeof title === 'string') meta = await lookupPaper({title: title.slice(0, 300)});
+    let meta = typeof openalexId === 'string' && /^W\d+$/.test(openalexId) ? await workById(openalexId) : null;
+    if (!meta) for (const d of [...new Set(candidates)]) if ((meta = await lookupPaper({doi: d}))) break;
+    if (!meta && !doi && !openalexId && typeof title === 'string') meta = await lookupPaper({title: title.slice(0, 300)});
     if (!meta) { p.metaLookup = {at: now(), found: false}; await store.savePaper(p); return res.status(404).json({error: 'No matching record found. Enter the DOI to look it up directly.'}); }
     p.meta = {...meta, fetchedAt: now()}; p.metaLookup = {at: now(), found: true};
     if (!p.renamed && meta.title) p.name = cleanName(meta.title, p.name);
@@ -189,6 +195,60 @@ app.post('/api/papers/:id/metadata', async (req, res) => {
   } catch (e) {
     res.status(502).json({error: 'Could not reach OpenAlex/Crossref. Check your connection and try again.'});
   }
+});
+
+// ---------- references ----------
+// The paper's reference list (from its OpenAlex record), cached with the paper for a week.
+app.get('/api/papers/:id/references', async (req, res) => {
+  if (!ids(req, res)) return;
+  const p = await store.loadPaper(req.params.id);
+  if (!p) return res.status(404).json({error: 'Paper not found.'});
+  const want = p.meta?.references || [];
+  if (!want.length) return res.json({items: [], reason: p.meta ? 'OpenAlex lists no references for this paper.' : 'Paper details not found yet.'});
+  const fresh = p.refs && p.refs.ids === want.join(',') && Date.now() - new Date(p.refs.at) < 7 * 864e5;
+  if (fresh && !req.query.refresh) return res.json({items: p.refs.items});
+  try {
+    const items = await worksById(want);
+    p.refs = {at: now(), ids: want.join(','), items}; await store.savePaper(p);
+    res.json({items});
+  } catch { res.status(502).json({error: 'Could not reach OpenAlex for the reference list.'}); }
+});
+app.post('/api/works/search', async (req, res) => {
+  const q = req.body?.q;
+  if (typeof q !== 'string' || q.trim().length < 8) return res.status(400).json({error: 'Search text is too short.'});
+  try { res.json({items: await searchWorks(q, 3)}); } catch { res.status(502).json({error: 'Could not reach OpenAlex.'}); }
+});
+
+// Only public web addresses: the server must not be steered at the local machine or the local network.
+function publicUrl(u) {
+  let url; try { url = new URL(u); } catch { return null; }
+  if (!/^https?:$/.test(url.protocol)) return null;
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || host.endsWith('.internal') || !host.includes('.') && !host.includes(':')) return null;
+  if (/^(127\.|10\.|0\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host) || /^(::1?$|fe80:|fc|fd)/.test(host)) return null;
+  return url;
+}
+// Download an open-access PDF into a project and attach its details.
+app.post('/api/projects/:pid/papers/from-url', async (req, res) => {
+  const project = await projectOr404(req, res); if (!project) return;
+  const {url, openalexId, doi} = req.body || {};
+  const target = publicUrl(url);
+  if (!target) return res.status(400).json({error: 'That download link is not a public web address.'});
+  let buf;
+  try {
+    const r = await fetch(target, {headers: {'User-Agent': 'Mozilla/5.0 (Margin paper reader)', Accept: 'application/pdf,*/*'}, redirect: 'follow', signal: AbortSignal.timeout(60000)});
+    if (!r.ok || !publicUrl(r.url)) throw new Error(`HTTP ${r.status}`);
+    if (Number(r.headers.get('content-length') || 0) > 60 * 1024 * 1024) throw new Error('too large');
+    buf = Buffer.from(await r.arrayBuffer());
+  } catch { return res.status(502).json({error: 'The open-access copy could not be downloaded. Try the publisher page instead.'}); }
+  if (buf.length > 60 * 1024 * 1024 || buf.subarray(0, 5).toString() !== '%PDF-') return res.status(415).json({error: 'That link gave a web page, not a PDF. Open it and download the PDF yourself.'});
+  const paper = await store.addPaper(buf, `${(doi || openalexId || 'paper').replace(/[\\/]/g, '_')}.pdf`);
+  await store.addToProject(project.id, paper.id);
+  try {
+    const meta = (openalexId && await workById(openalexId)) || (doi && await lookupPaper({doi}));
+    if (meta && !paper.meta) { paper.meta = {...meta, fetchedAt: now()}; paper.metaLookup = {at: now(), found: true}; if (!paper.renamed && meta.title) paper.name = cleanName(meta.title, paper.name); await store.savePaper(paper); }
+  } catch {}
+  res.json(store.paperSummary(paper));
 });
 
 // ---------- chats (per project, focused on one paper) ----------
