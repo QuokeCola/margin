@@ -1,0 +1,121 @@
+/* ---------- Settings: animated setup guides (markup in guides.js) ----------
+   One 12 s loop per guide: step 1 plays in the first third, step 2 in the second, step 3 in the last;
+   the list item of the current step is highlighted on the same clock. Every shape's plain style is
+   the finished state, so with prefers-reduced-motion (style.css turns all animations off) the drawing
+   is a still of the completed setup and no step is highlighted. Hovering or focusing inside a guide
+   pauses it. */
+.guide{--guide-t:12s;display:grid;grid-template-columns:minmax(0,1fr) 136px;gap:14px;align-items:start;margin-top:10px}
+.guide>.setup-steps{margin-top:0;grid-column:1;grid-row:1}
+.guide-art{grid-column:2;grid-row:1;width:136px;height:auto;display:block;margin-top:2px;overflow:visible}
+.guide:hover *,.guide:focus-within *{animation-play-state:paused!important}
+@media(max-width:560px){.guide{grid-template-columns:1fr}.guide-art{grid-row:auto;grid-column:1;width:150px;margin:0 auto}}
+
+/* step highlight, synced with the drawing */
+.guide .setup-steps li{border-radius:0 6px 6px 0;padding:1px 6px;margin:0 -6px 1px}
+.guide .setup-steps li:nth-child(1){animation:g-step1 var(--guide-t) ease infinite}
+.guide .setup-steps li:nth-child(2){animation:g-step2 var(--guide-t) ease infinite}
+.guide .setup-steps li:nth-child(3){animation:g-step3 var(--guide-t) ease infinite}
+@keyframes g-step1{0%{background:transparent;color:var(--legend);box-shadow:none}2%,31%{background:var(--active);color:var(--text);box-shadow:inset 2px 0 0 var(--green)}34%,100%{background:transparent;color:var(--legend);box-shadow:none}}
+@keyframes g-step2{0%,31%{background:transparent;color:var(--legend);box-shadow:none}34%,64%{background:var(--active);color:var(--text);box-shadow:inset 2px 0 0 var(--green)}67%,100%{background:transparent;color:var(--legend);box-shadow:none}}
+@keyframes g-step3{0%,64%{background:transparent;color:var(--legend);box-shadow:none}67%,96%{background:var(--active);color:var(--text);box-shadow:inset 2px 0 0 var(--green)}100%{background:transparent;color:var(--legend);box-shadow:none}}
+
+/* drawing style: thin lines in the app's greens, all from theme variables */
+.guide-art *{vector-effect:non-scaling-stroke}
+.g-scene{animation:g-scene var(--guide-t) ease infinite}
+@keyframes g-scene{0%{opacity:0}3%,96%{opacity:1}100%{opacity:0}}
+.g-win{fill:var(--surface);stroke:var(--icon-border);stroke-width:1.1}
+.g-frame{fill:none;stroke:var(--icon-border);stroke-width:1}.g-frame.faint{stroke:var(--line-2)}
+.g-dot{fill:var(--btn-border)}
+.g-addr{fill:var(--quiet);stroke:var(--line-2);stroke-width:1}
+.g-text{fill:none;stroke:var(--btn-border);stroke-width:2;stroke-linecap:round}
+.g-text.thin{stroke-width:1.4}.g-text.strong{stroke:var(--icon-border)}.g-text.accent{stroke:var(--green)}
+.g-icon,.g-icon-line{fill:none;stroke:var(--muted);stroke-width:1.1;stroke-linejoin:round}
+.g-m{fill:var(--primary)}
+.g-m-text{fill:var(--on-primary);font-family:Georgia,serif;text-anchor:middle}
+.g-track{fill:var(--line-2)}.ext-track{fill:var(--green)}
+.ext-card .g-track{fill:var(--green)}
+.g-knob{fill:var(--surface);stroke:var(--btn-border);stroke-width:.6}
+.g-btn{fill:var(--surface);stroke:var(--btn-border);stroke-width:1}.g-btn.ghost{stroke:var(--line-2)}
+.g-card{fill:var(--quiet);stroke:var(--line-2);stroke-width:1}
+.g-folder{fill:var(--chip);stroke:var(--green);stroke-width:1.1;stroke-linejoin:round}
+.g-pop,.g-sheet{fill:var(--bg);stroke:var(--btn-border);stroke-width:1}
+.g-shadow{fill:var(--shadow-5)}
+.g-input{fill:var(--surface);stroke:var(--green);stroke-width:1.1}
+.g-code{fill:none;stroke:var(--text);stroke-width:2;stroke-linecap:round;stroke-dasharray:0 3.6}
+.g-check circle{fill:var(--green)}.g-check path,.g-tick{fill:none;stroke:var(--on-primary);stroke-width:1.2;stroke-linecap:round;stroke-linejoin:round}
+.g-tick{stroke:var(--green);stroke-width:1.4;opacity:0}
+.g-nav{fill:var(--active)}
+.g-primary{fill:var(--primary)}.g-on-primary{fill:none;stroke:var(--on-primary);stroke-width:1.4;stroke-linecap:round;opacity:.85}
+.g-key{fill:none;stroke:var(--accent-text);stroke-width:1.2;stroke-linecap:round;stroke-linejoin:round}
+.g-fill{fill:var(--green)}
+.g-cursor path{fill:var(--text);stroke:var(--surface);stroke-width:.9;stroke-linejoin:round}
+.g-ripple{fill:none;stroke:var(--green);stroke-width:1.4;opacity:0;transform-box:fill-box;transform-origin:center}
+.ext-popup,.key-margin,.key-save,.ext-check,.key-check{transform-box:fill-box}
+.ext-popup{transform-origin:85% 0}.key-save,.ext-check,.key-check{transform-origin:center}
+.key-fill{transform-box:fill-box;transform-origin:left center}
+
+/* animation for each shape (the run of each guide follows one shared clock) */
+.ext-cursor{transform:translate(118px,51px)}
+.guide-art .g-scene *{animation-duration:var(--guide-t);animation-iteration-count:infinite;animation-timing-function:ease-in-out}
+.ext-cursor{animation-name:ext-cursor}
+@keyframes ext-cursor{0%,4%{transform:translate(70px,80px)}11%,34%{transform:translate(129.5px,26px)}42%,66%{transform:translate(27.5px,39.5px)}73%,76%{transform:translate(135px,9.5px)}80%,100%{transform:translate(118px,51px)}}
+.ext-r1{animation-name:g-click-12}.ext-r2{animation-name:g-click-43}.ext-r3{animation-name:g-click-74}.ext-r4{animation-name:g-click-81}
+.ext-knob{animation-name:ext-knob}
+@keyframes ext-knob{0%,12%{transform:translateX(-8px)}15%,100%{transform:none}}
+.ext-track{animation-name:ext-track}
+@keyframes ext-track{0%,12%{fill:var(--line-2)}15%,100%{fill:var(--green)}}
+.ext-devbar{animation-name:g-appear-16}
+.ext-folder{transform:translate(16px,61px) scale(.6);opacity:0;animation-name:ext-folder}
+@keyframes ext-folder{0%,43%{opacity:0;transform:translate(31px,43px) scale(.5)}46%,48%{opacity:1;transform:translate(34px,44px) scale(1)}55%{opacity:1;transform:translate(16px,61px) scale(.75)}59%,100%{opacity:0;transform:translate(16px,61px) scale(.6)}}
+.ext-card{animation-name:g-appear-54}
+.ext-pin{animation-name:g-fade-in-58}
+.ext-popup{animation-name:g-pop-74}
+.ext-code{animation-name:g-fade-in-81}
+.ext-input{animation-name:g-input-81}
+.ext-check{animation-name:g-check-86}
+
+.key-cursor{transform:translate(127px,84px);animation-name:key-cursor}
+@keyframes key-cursor{0%,3%{transform:translate(96px,70px)}9%,11%{transform:translate(56px,33.5px)}19%,34%{transform:translate(91px,46px)}39%,41%{transform:translate(16px,32px)}46%,66%{transform:translate(77.5px,28.5px)}73%,76%{transform:translate(100px,71px)}83%,100%{transform:translate(127px,84px)}}
+.key-r1{animation-name:g-click-10}.key-r2{animation-name:g-click-22}.key-r3{animation-name:g-click-40}.key-r4{animation-name:g-click-47}.key-r5{animation-name:g-click-75}.key-r6{animation-name:g-click-85}
+.key-row{animation-name:g-appear-11}
+.key-copied{animation-name:g-fade-in-22}.key-copy{animation-name:g-fade-out-22}
+.key-pageA{opacity:0;animation-name:g-page-out-40}
+.key-pageB{animation-name:g-fade-in-41}
+.key-nav{transform:translateY(7px);animation-name:key-nav}
+@keyframes key-nav{0%,40%{transform:none}43%,100%{transform:translateY(7px)}}
+.key-fill{animation-name:key-fill}
+@keyframes key-fill{0%,48%{transform:scaleX(0)}58%,100%{transform:none}}
+.key-margin{animation-name:g-appear-64}
+.key-code{animation-name:g-fade-in-76}
+.key-input{animation-name:g-input-76}
+.key-save{animation-name:key-save}
+@keyframes key-save{0%,84%{transform:none}85.5%{transform:scale(.9)}88%,100%{transform:none}}
+.key-check{animation-name:g-check-87}
+
+/* shared keyframes; the number is the % of the loop at which the thing happens */
+@keyframes g-click-10{0%,9.5%{opacity:0;transform:scale(.3)}10%{opacity:.7}15%,100%{opacity:0;transform:scale(1.5)}}
+@keyframes g-click-12{0%,11.5%{opacity:0;transform:scale(.3)}12%{opacity:.7}17%,100%{opacity:0;transform:scale(1.5)}}
+@keyframes g-click-22{0%,21.5%{opacity:0;transform:scale(.3)}22%{opacity:.7}27%,100%{opacity:0;transform:scale(1.5)}}
+@keyframes g-click-40{0%,39.5%{opacity:0;transform:scale(.3)}40%{opacity:.7}45%,100%{opacity:0;transform:scale(1.5)}}
+@keyframes g-click-43{0%,42.5%{opacity:0;transform:scale(.3)}43%{opacity:.7}48%,100%{opacity:0;transform:scale(1.5)}}
+@keyframes g-click-47{0%,46.5%{opacity:0;transform:scale(.3)}47%{opacity:.7}52%,100%{opacity:0;transform:scale(1.5)}}
+@keyframes g-click-74{0%,73.5%{opacity:0;transform:scale(.3)}74%{opacity:.7}79%,100%{opacity:0;transform:scale(1.5)}}
+@keyframes g-click-75{0%,74.5%{opacity:0;transform:scale(.3)}75%{opacity:.7}80%,100%{opacity:0;transform:scale(1.5)}}
+@keyframes g-click-81{0%,80.5%{opacity:0;transform:scale(.3)}81%{opacity:.7}86%,100%{opacity:0;transform:scale(1.5)}}
+@keyframes g-click-85{0%,84.5%{opacity:0;transform:scale(.3)}85%{opacity:.7}90%,100%{opacity:0;transform:scale(1.5)}}
+@keyframes g-appear-11{0%,11%{opacity:0;transform:translateY(-3px)}15%,100%{opacity:1;transform:none}}
+@keyframes g-appear-16{0%,15%{opacity:0;transform:translateY(-3px)}20%,100%{opacity:1;transform:none}}
+@keyframes g-appear-54{0%,54%{opacity:0;transform:translateY(4px)}59%,100%{opacity:1;transform:none}}
+@keyframes g-appear-64{0%,64%{opacity:0;transform:translateY(6px)}69%,100%{opacity:1;transform:none}}
+@keyframes g-fade-in-22{0%,22%{opacity:0}24%,100%{opacity:1}}
+@keyframes g-fade-out-22{0%,22%{opacity:1}24%,100%{opacity:0}}
+@keyframes g-fade-in-41{0%,40%{opacity:0}43%,100%{opacity:1}}
+@keyframes g-page-out-40{0%,40%{opacity:1}43%,100%{opacity:0}}
+@keyframes g-fade-in-58{0%,58%{opacity:0}62%,100%{opacity:1}}
+@keyframes g-fade-in-76{0%,76%{opacity:0}77%,100%{opacity:1}}
+@keyframes g-fade-in-81{0%,81%{opacity:0}82%,100%{opacity:1}}
+@keyframes g-pop-74{0%,74%{opacity:0;transform:translateY(-3px) scale(.95)}78%,100%{opacity:1;transform:none}}
+@keyframes g-input-76{0%,75%{stroke:var(--input-border)}77%,100%{stroke:var(--green)}}
+@keyframes g-input-81{0%,80%{stroke:var(--input-border)}82%,100%{stroke:var(--green)}}
+@keyframes g-check-86{0%,86%{opacity:0;transform:scale(.4)}90%,100%{opacity:1;transform:none}}
+@keyframes g-check-87{0%,87%{opacity:0;transform:scale(.4)}91%,100%{opacity:1;transform:none}}

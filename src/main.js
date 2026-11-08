@@ -4,6 +4,7 @@ import worker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 // its fonts load only when an equation is shown. The Markdown/maths code loads with the first chat.
 import 'katex/dist/katex.min.css';
 import './style.css';
+import './guides.css';
 import {parseReferences, resolveReference, TOKEN, tokenRef, findMentions, tagOf, QUOTE, ANCHOR, quoteRef, structuredRefs} from './references.js';
 import {paperLabels, resolvePaper, shortId} from '../lib/labels.mjs';
 import {textBoxes, detectEquations} from './layout.js';
@@ -11,6 +12,7 @@ import {preparePage, locateQuote} from './quote.js';
 import {parseBibliography, findMarkers, matchEntries} from './bib.js';
 import {clampZoom, wheelZoomFactor, zoomAnchor, pinchStep} from './zoom.js';
 import {applyTheme, getThemePref, setThemePref} from './theme.js';
+import {KEY_ART, EXT_ART} from './guides.js';
 pdfjs.GlobalWorkerOptions.workerSrc = worker;
 applyTheme();
 let marked, DOMPurify, renderMath, markdownLoading = null;
@@ -23,7 +25,7 @@ const h = (tag, props = {}, ...kids) => { const el = Object.assign(document.crea
 
 $('#app').innerHTML = `<header><button id="toggle-library" class="icon" title="Show or hide the library" aria-label="Toggle library">☰</button><a class="brand" href="/">m<span>Margin</span></a><span class="subtitle">A little closer to the paper.</span>
 <div class="header-tools"><label class="model-picker" title="Model used for new answers">Model <select id="model" disabled><option>…</option></select></label><span id="connection">Connecting…</span><button id="open-settings">Settings</button></div></header>
-<main><aside class="library"><div class="project-bar"><small>PROJECT</small><div class="project-row"><select id="project" aria-label="Project"></select><button id="project-rename" class="icon" title="Rename project" aria-label="Rename project">✎</button><button id="project-delete" class="icon del" title="Delete project" aria-label="Delete project">×</button></div><button id="open-map" class="map-button" title="How the papers in this project cite each other">◎ Citation map</button></div>
+<main><aside class="library"><div class="project-bar"><div class="project-head"><small>PROJECT</small><button id="manage-projects" class="small" title="All projects: open, rename, delete or create one" aria-haspopup="dialog">Manage</button></div><div class="project-row"><select id="project" aria-label="Project"></select><button id="project-rename" class="icon" title="Rename project" aria-label="Rename project">✎</button><button id="project-delete" class="icon del" title="Delete project" aria-label="Delete project">×</button></div><button id="open-map" class="map-button" title="How the papers in this project cite each other">◎ Citation map</button></div>
 <div class="lib-section"><div class="lib-head"><small>PAPERS</small><label class="file-button small">+ Add PDF<input id="file" type="file" accept="application/pdf"></label></div><ul id="papers" aria-label="Papers"></ul></div>
 <div class="lib-section"><div class="lib-head"><small>CHATS</small><button id="new-chat-side" class="small" title="New chat: about the open paper, or the whole project">+ New</button></div><ul id="chats" aria-label="Chats"></ul></div></aside>
 <section class="chat"><div class="section-head"><div><small id="chat-paper">YOUR STUDY DESK</small><h1 id="chat-title">Read. Question. Understand.</h1></div><button id="new-chat" disabled>New chat</button></div><div id="messages" tabindex="0" aria-label="Conversation"></div><form id="ask"><div id="context" hidden></div><textarea id="question" aria-label="Question about the paper" placeholder="What would you like to understand?" rows="3" maxlength="8000"></textarea><div class="compose-bottom"><span id="compose-hint">Enter to send · Ctrl+Enter for a new line. Paper text + this chat are sent to OpenAI.</span><div class="compose-actions"><button type="button" id="web-toggle" class="web-toggle" aria-pressed="false" title="Let the answer search the web (OpenAI web search, billed per search). Off by default.">⌕ Web</button><button id="send" type="submit">Ask ↗</button></div></div></form><p id="notice" role="status">Add a PDF, or pick one from the library.</p></section>
@@ -37,16 +39,18 @@ $('#app').innerHTML = `<header><button id="toggle-library" class="icon" title="S
 <div id="pdf-pop" hidden><button type="button" id="pop-ask">Ask AI ↗</button></div>
 <div id="new-chat-menu" hidden role="menu" aria-label="New chat"><button type="button" role="menuitem" data-scope="paper"><b>This paper</b><small></small></button><button type="button" role="menuitem" data-scope="project"><b>Whole project</b><small>Searches all papers in this project; answers cite each paper</small></button></div>
 <dialog id="ask-text"><form id="ask-text-form"><h2 id="ask-text-title"></h2><label><input id="ask-text-input" autocomplete="off" maxlength="200"></label><div class="dialog-buttons"><button type="button" id="ask-text-cancel">Cancel</button><button type="submit" class="primary">Save</button></div></form></dialog>
-<dialog id="info"><div class="info-body"><div id="info-content"></div><div class="info-lookup"><label>DOI<input id="info-doi" placeholder="10.1109/…" autocomplete="off" spellcheck="false"></label><button type="button" id="info-lookup">Look up</button></div><p id="info-msg" role="status"></p><div class="dialog-buttons"><button type="button" id="info-close" class="primary">Close</button></div></div></dialog>
-<dialog id="settings"><form id="settings-form"><h2>Settings</h2>
-<label>OpenAI API key<input id="key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-…"></label><p id="key-hint" class="hint"></p><ol class="setup-steps"><li>Sign in at <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">platform.openai.com/api-keys</a> and click <b>Create new secret key</b>.</li><li>Add credit under Billing if your account has none; answers are billed per use.</li><li>Paste the key above and click <b>Save</b>.</li></ol><nav class="openai-links" aria-label="OpenAI account pages"><a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">Create an API key ↗</a><a href="https://platform.openai.com/usage" target="_blank" rel="noopener noreferrer">Usage ↗</a><a href="https://platform.openai.com/settings/organization/billing/overview" target="_blank" rel="noopener noreferrer">Billing ↗</a></nav>
+<dialog id="info" aria-label="Paper details"><div class="dialog-x-bar"><button type="button" class="dialog-x" data-close aria-label="Close" title="Close (Esc)">×</button></div><div class="info-body"><div id="info-content"></div><div class="info-lookup"><label>DOI<input id="info-doi" placeholder="10.1109/…" autocomplete="off" spellcheck="false"></label><button type="button" id="info-lookup">Look up</button></div><p id="info-msg" role="status"></p><div class="dialog-buttons"><button type="button" id="info-close" class="primary">Close</button></div></div></dialog>
+<dialog id="settings" aria-labelledby="settings-title"><form id="settings-form"><div class="dialog-x-bar"><button type="button" class="dialog-x" data-close aria-label="Close" title="Close (Esc)">×</button></div><h2 id="settings-title">Settings</h2>
+<label>OpenAI API key<input id="key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-…"></label><p id="key-hint" class="hint"></p><div class="guide">${KEY_ART}<ol class="setup-steps"><li>Sign in at <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">platform.openai.com/api-keys</a> and click <b>Create new secret key</b>.</li><li>Add credit under Billing if your account has none; answers are billed per use.</li><li>Paste the key above and click <b>Save</b>.</li></ol></div><nav class="openai-links" aria-label="OpenAI account pages"><a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">Create an API key ↗</a><a href="https://platform.openai.com/usage" target="_blank" rel="noopener noreferrer">Usage ↗</a><a href="https://platform.openai.com/settings/organization/billing/overview" target="_blank" rel="noopener noreferrer">Billing ↗</a></nav>
 <label>Library proxy prefix (optional)<input id="proxy-prefix" autocomplete="off" spellcheck="false" placeholder="https://proxy.lib.your-university.edu/login?url="></label><p class="hint">Used by “Get PDF” in the desktop app to open papers through your library’s sign-in. Ask your library for its proxy link prefix (EZproxy “login?url=” style).</p>
 <div class="ext-box"><b>Browser extension</b><p class="hint" id="ext-status">Lets “Add to project” use your own browser and its logins: the paper opens there and the PDF comes back automatically.</p>
-<ol class="setup-steps"><li>In Chrome (or Edge/Brave), open <code>chrome://extensions</code> and turn on <b>Developer mode</b>.</li><li>Click <b>Load unpacked</b> and choose this folder: <code id="ext-folder">…</code> <button type="button" class="small" id="ext-copy-folder">Copy</button></li><li>Click the Margin icon in the toolbar and paste the pairing code: <code id="ext-code">••••••</code> <button type="button" class="small" id="ext-show">Show code</button></li></ol></div>
+<div class="guide">${EXT_ART}<ol class="setup-steps"><li>In Chrome (or Edge/Brave), open <code>chrome://extensions</code> and turn on <b>Developer mode</b>.</li><li>Click <b>Load unpacked</b> and choose this folder: <code id="ext-folder">…</code> <button type="button" class="small" id="ext-copy-folder">Copy</button></li><li>Click the Margin icon in the toolbar and paste the pairing code: <code id="ext-code">••••••</code> <button type="button" class="small" id="ext-show">Show code</button></li></ol></div></div>
 <label>Model<select id="settings-model"></select></label><label>…or type a model ID<input id="custom-model" autocomplete="off" spellcheck="false" placeholder="e.g. gpt-5.2"></label>
 <p class="hint">Stored only on this computer, in a file readable only by you, and applied immediately. A new key is checked with OpenAI before it is saved; it is sent only to OpenAI.</p>
 <label>Theme<select id="theme" title="Applied right away; kept in this app's browser storage"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
-<p id="settings-msg" role="status"></p><div class="dialog-buttons"><button type="button" id="settings-cancel">Cancel</button><button type="submit" id="settings-save" class="primary">Save</button></div></form></dialog>`;
+<p id="settings-msg" role="status"></p><div class="dialog-buttons"><button type="button" id="settings-cancel">Cancel</button><button type="submit" id="settings-save" class="primary">Save</button></div></form></dialog>
+<dialog id="projects" aria-labelledby="projects-title"><div class="dialog-x-bar"><button type="button" class="dialog-x" data-close aria-label="Close" title="Close (Esc)">×</button></div><h2 id="projects-title">Projects</h2><p class="hint">Each project has its own papers and chats; a paper can be in several projects.</p><ul id="project-list" aria-label="Projects"></ul><p id="projects-msg" role="status"></p><form id="project-new" class="project-new"><input id="project-new-name" maxlength="100" autocomplete="off" placeholder="New project name" aria-label="New project name"><button type="submit" class="primary">+ New project</button></form></dialog>
+<dialog id="confirm" aria-labelledby="confirm-title" aria-describedby="confirm-body"><form id="confirm-form" method="dialog"><h2 id="confirm-title"></h2><div id="confirm-body"></div><div class="dialog-buttons"><button type="button" id="confirm-cancel">Cancel</button><button type="submit" id="confirm-ok" class="danger"></button></div></form></dialog>`;
 
 let session = null, models = [], projects = [], project = null, paper = null, chat = null; // project: {id, name, papers, chats}
 let doc = null, pages = [], index = {}, overrides = {};
@@ -176,6 +180,7 @@ function renderProjects() {
   const sel = $('#project');
   sel.replaceChildren(...projects.map(x => h('option', {value: x.id, textContent: `${x.name} (${x.papers})`, selected: x.id === project?.id})), h('option', {value: '__new', textContent: '+ New project…'}));
   $('#project-delete').disabled = projects.length <= 1;
+  if ($('#projects').open) renderProjectPanel();
 }
 async function loadProject(pid, render = true) {
   project = await api(`/api/projects/${pid}`);
@@ -201,17 +206,127 @@ $('#project').onchange = async e => {
     return;
   }
   if (working) { renderProjects(); return; }
-  closeMap(); await closePaper(); await loadProject(v); renderProjects();
-  notice(`Project "${project.name}": ${project.papers.length ? 'pick a paper in the sidebar, or add a PDF.' : 'add a PDF to start.'}`);
+  await switchProject(v);
 };
+async function switchProject(pid) {
+  closeMap(); await closePaper(); await loadProject(pid); renderProjects();
+  notice(`Project "${project.name}": ${project.papers.length ? 'pick a paper in the sidebar, or add a PDF.' : 'add a PDF to start.'}`);
+}
 $('#project-rename').onclick = async () => {
   const name = await askText('Rename project', project.name); if (!name?.trim()) return;
   try { await api(pathP(), {method: 'PATCH', body: {name}}); await refreshProjects(); await refreshProject(); } catch (e) { notice(e.message); }
 };
-$('#project-delete').onclick = async () => {
-  if (!confirm(`Delete the project "${project.name}" and its ${project.chats.length} chats? Papers that are in no other project are removed from the library too.`)) return;
-  try { await api(pathP(), {method: 'DELETE'}); await closePaper(); project = null; await refreshProjects(); renderLibrary(); notice('Project deleted.'); } catch (e) { notice(e.message); }
+$('#project-delete').onclick = () => project && deleteProject(project.id);
+
+// In-app confirmation (window.confirm is not used in the app); resolves true when confirmed.
+// body: paragraphs, each a string or element props; Cancel has the focus, Esc cancels.
+function confirmBox({title, body, ok}) {
+  const d = $('#confirm');
+  $('#confirm-title').textContent = title;
+  $('#confirm-body').replaceChildren(...body.filter(Boolean).map(t => h('p', typeof t === 'string' ? {textContent: t} : t)));
+  $('#confirm-ok').textContent = ok;
+  d.showModal(); $('#confirm-cancel').focus();
+  return new Promise(resolve => {
+    const done = v => { if (d.open) d.close(); $('#confirm-form').onsubmit = $('#confirm-cancel').onclick = d.oncancel = null; resolve(v); };
+    $('#confirm-form').onsubmit = e => { e.preventDefault(); done(true); };
+    $('#confirm-cancel').onclick = () => done(false);
+    d.oncancel = () => done(false);
+  });
+}
+const plural = (k, word) => `${k} ${word}${k === 1 ? '' : 's'}`;
+// Deleting a project (server: DELETE /api/projects/:pid) removes its chats; each of its papers stays
+// in the other projects that contain it, and papers in no other project are deleted from the store
+// (store.dropOrphans: the paper folder with its PDF, details and corrections). The last project cannot be deleted.
+async function deleteProject(id) {
+  if (projects.length <= 1) { notice('Keep at least one project: create another one before deleting this one.'); return false; }
+  const isOpen = id === project?.id;
+  if (isOpen && (working || loading)) { notice('Wait for the current answer to finish before deleting the open project.'); return false; }
+  let target, others;
+  try { [target, ...others] = await Promise.all([id, ...projects.filter(x => x.id !== id).map(x => x.id)].map(pid => api(`/api/projects/${pid}`))); }
+  catch (e) { notice(e.message); return false; }
+  const elsewhere = new Set(others.flatMap(x => x.papers.map(p => p.id)));
+  const shared = target.papers.filter(p => elsewhere.has(p.id)).length, only = target.papers.length - shared;
+  const ok = await confirmBox({title: `Delete “${target.name}”?`, ok: 'Delete project', body: [
+    target.chats.length ? `Its ${plural(target.chats.length, 'chat')} will be deleted.` : 'It has no chats.',
+    !target.papers.length ? 'It has no papers.' : null,
+    only ? `${plural(only, 'paper')} ${only === 1 ? 'is' : 'are'} in no other project and will be removed from your library (stored PDF, paper details and equation corrections).` : null,
+    shared ? `${plural(shared, 'paper')} ${shared === 1 ? 'is' : 'are'} also in other projects and stay${shared === 1 ? 's' : ''} there, with ${shared === 1 ? 'its' : 'their'} chats in those projects.` : null,
+    {className: 'hint', textContent: (isOpen ? 'This is the open project; Margin will switch to another one. ' : '') + 'This cannot be undone.'}]});
+  if (!ok) return false;
+  try {
+    await api(`/api/projects/${id}`, {method: 'DELETE'});
+    if (isOpen) { closeMap(); await closePaper(); project = null; }
+    await refreshProjects(); if (isOpen) renderLibrary();
+    notice(`Project “${target.name}” deleted.${isOpen && project ? ` Now showing “${project.name}”.` : ''}`);
+    return true;
+  } catch (e) { notice(e.message); return false; }
+}
+
+// ---------- projects panel (sidebar → Manage) ----------
+let renamingProject = null;
+const labelled = (el, label) => { el.setAttribute('aria-label', label); return el; };
+function renderProjectPanel() {
+  const last = projects.length <= 1;
+  $('#project-list').replaceChildren(...projects.map(x => {
+    const current = x.id === project?.id;
+    const li = h('li', {className: 'pj' + (current ? ' current' : '')});
+    li.dataset.id = x.id;
+    if (renamingProject === x.id) {
+      const input = labelled(h('input', {value: x.name, maxLength: 100, autocomplete: 'off'}), `New name for project ${x.name}`);
+      const cancel = () => { renamingProject = null; renderProjectPanel(); focusProjectRow(x.id, '.pj-rename-btn'); };
+      const save = async () => {
+        const name = input.value.trim(); if (!name || name === x.name) return cancel();
+        try { await api(`/api/projects/${x.id}`, {method: 'PATCH', body: {name}}); renamingProject = null; await refreshProjects(); if (current) await refreshProject(); $('#projects-msg').textContent = ''; focusProjectRow(x.id, '.pj-rename-btn'); }
+        catch (e) { $('#projects-msg').textContent = e.message; }
+      };
+      input.onkeydown = e => {
+        if (e.key === 'Enter') { e.preventDefault(); save(); }
+        else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancel(); } // keep the panel open
+      };
+      li.append(h('div', {className: 'pj-main pj-rename'}, input), h('div', {className: 'pj-actions'},
+        h('button', {type: 'button', className: 'small primary', textContent: 'Save', onclick: save}),
+        h('button', {type: 'button', className: 'small', textContent: 'Cancel', onclick: cancel})));
+      queueMicrotask(() => { input.focus(); input.select(); });
+      return li;
+    }
+    const name = h('span', {className: 'pj-name', title: x.name}, x.name);
+    if (current) name.append(h('span', {className: 'pj-badge', textContent: 'OPEN'}));
+    li.append(h('div', {className: 'pj-main'}, name, h('span', {className: 'pj-meta', textContent: `${plural(x.papers, 'paper')} · ${plural(x.chats, 'chat')} · updated ${fmtDate(x.updatedAt)}`})),
+      h('div', {className: 'pj-actions'},
+        labelled(h('button', {type: 'button', className: 'small pj-open', textContent: current ? 'Open now' : 'Open', disabled: current, onclick: () => openFromPanel(x.id)}), current ? `${x.name} is open` : `Open project ${x.name}`),
+        labelled(h('button', {type: 'button', className: 'small pj-rename-btn', textContent: 'Rename', onclick: () => { renamingProject = x.id; $('#projects-msg').textContent = ''; renderProjectPanel(); }}), `Rename project ${x.name}`),
+        labelled(h('button', {type: 'button', className: 'small del-btn', textContent: 'Delete', disabled: last, title: last ? 'The last project cannot be deleted; create another one first.' : '', onclick: () => deleteFromPanel(x.id)}), `Delete project ${x.name}`)));
+    return li;
+  }));
+}
+function focusProjectRow(id, sel) { (document.querySelector(`#project-list li[data-id="${id}"] ${sel}`) || $('#project-new-name')).focus(); }
+async function openFromPanel(id) {
+  if (working) { $('#projects-msg').textContent = 'Wait for the current answer to finish before switching projects.'; return; }
+  $('#projects').close(); await switchProject(id);
+}
+async function deleteFromPanel(id) {
+  const i = projects.findIndex(x => x.id === id);
+  if (await deleteProject(id)) { renderProjectPanel(); const next = projects[Math.min(i, projects.length - 1)]; if (next) focusProjectRow(next.id, '.pj-rename-btn'); }
+}
+$('#manage-projects').onclick = async () => {
+  renamingProject = null; $('#projects-msg').textContent = ''; $('#project-new-name').value = '';
+  try { projects = await api('/api/projects'); } catch {}
+  renderProjectPanel(); $('#projects').showModal();
 };
+$('#project-new').onsubmit = async e => {
+  e.preventDefault();
+  const name = $('#project-new-name').value.trim();
+  if (!name) { $('#projects-msg').textContent = 'Type a name for the new project.'; $('#project-new-name').focus(); return; }
+  try {
+    const p = await api('/api/projects', {body: {name}});
+    $('#project-new-name').value = '';
+    if (working) { await refreshProjects(); $('#projects-msg').textContent = `Created “${p.name}”; open it when the current answer has finished.`; return; }
+    $('#projects').close(); closeMap(); await closePaper(); await loadProject(p.id); await refreshProjects();
+    notice(`Project "${p.name}" created. Add PDFs to it.`);
+  } catch (err) { $('#projects-msg').textContent = err.message; }
+};
+// The × in the corner of a dialog closes it (like its Close/Cancel button; Esc does the same).
+document.addEventListener('click', e => { const x = e.target.closest?.('.dialog-x'); if (x) x.closest('dialog')?.close(); });
 
 let expandedAt = 0;
 function renderLibrary() {

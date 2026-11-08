@@ -178,6 +178,11 @@ dialog[open]::backdrop{animation:fade .26s ease}
 .lib-head{display:flex;align-items:center;justify-content:space-between;padding:0 4px 6px;border-bottom:1px solid var(--line-3);margin-bottom:6px}
 .small,.file-button.small{font-size:11px;padding:4px 9px}
 #papers,#chats{list-style:none;margin:0;padding:0;overflow:visible;flex:none}
+/* Each list scrolls inside its own section when both do not fit (a shrunken section used to let its
+   last items draw over the next heading). The 6px padding/negative margin keep the current paper's
+   shadow from being clipped by the scroll box without moving anything. */
+.lib-section{min-height:96px}.lib-head{flex:none}
+#papers,#chats{overflow-y:auto;overscroll-behavior:contain;flex:0 1 auto;min-height:0;padding:2px 6px;margin:-2px -6px}
 #papers .paper{padding:2px;margin-bottom:2px}
 #papers .paper-name{display:flex;flex-direction:column;align-items:flex-start;gap:1px;white-space:normal}
 #papers .paper-name span{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:12.5px;line-height:1.35}
@@ -301,3 +306,44 @@ body.map-mode .chat,body.map-mode .reader{display:none}
 /* Long chats: older messages (added above the newest ones) skip layout and paint until they scroll
    near; the clip margin keeps focus rings and chip shadows. */
 #messages>.message.lazy{content-visibility:auto;contain-intrinsic-size:auto 500px;overflow-clip-margin:16px}
+
+/* ---------- dialog close button (×), stays in the top-right corner while the dialog scrolls ---------- */
+/* A zero-height sticky bar as the first child (sticky offsets count from inside the dialog padding, so top:0 pins it from the start). */
+.dialog-x-bar{position:sticky;top:0;height:0;z-index:5}
+.dialog-x{position:absolute;top:-17px;right:-18px;width:30px;height:30px;padding:0;display:grid;place-items:center;border-radius:50%;font-size:18px;line-height:1;color:var(--muted);background:var(--bg);border:1px solid transparent}
+.dialog-x:hover{color:var(--text);background:var(--hover);border-color:var(--btn-border)}
+#settings h2,#info-content>h2:first-child,#projects h2{padding-right:30px}
+#settings{width:min(500px,calc(100vw - 32px))}
+
+/* ---------- projects panel ---------- */
+.project-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.project-head .small{padding:2px 8px;font-size:10.5px}
+#projects{width:min(560px,calc(100vw - 32px));max-height:85vh;overflow:auto}
+#projects>.hint{margin:-8px 0 12px}
+#project-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.pj{display:flex;align-items:center;gap:10px;padding:9px 10px 9px 12px;border:1px solid var(--line-3);border-radius:9px;background:var(--surface)}
+.pj.current{border-color:var(--chip-border);box-shadow:inset 3px 0 0 var(--green)}
+.pj-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.pj-name{font-size:13.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pj-meta{font-size:11px;color:var(--meta)}
+.pj-badge{font-size:10px;letter-spacing:1px;color:var(--add-chat);margin-left:6px;font-weight:500}
+.pj-actions{display:flex;gap:6px;flex:none}
+.pj-actions .del-btn{color:var(--danger)}
+.pj-actions .del-btn:hover:not(:disabled){border-color:var(--danger)}
+.pj-rename{flex-direction:row;align-items:center}
+.pj-rename input{flex:1;min-width:0;font-size:13px}
+#projects .pj input{border:1px solid var(--input-border);border-radius:6px;padding:5px 8px;background:var(--surface);color:var(--btn-text)}
+.project-new{display:flex;gap:8px;margin-top:14px;padding-top:14px;border-top:1px solid var(--line-3)}
+.project-new input{flex:1;min-width:0}
+#projects-msg{font-size:12px;color:var(--danger);min-height:16px;margin:8px 0 0}
+@media(max-width:520px){.pj{flex-wrap:wrap}.pj-actions{width:100%;justify-content:flex-end}}
+
+/* ---------- in-app confirmation ---------- */
+#confirm{width:min(420px,calc(100vw - 32px))}
+#confirm h2{font-size:21px;margin-bottom:12px}
+#confirm-body p{font-size:13px;line-height:1.55;margin:0 0 8px;color:var(--body-2)}
+#confirm-body p.hint{font-size:12px}
+.danger{color:var(--danger);border-color:var(--danger);font-weight:600}.danger:hover{background:var(--hover)}
+#info .ref-rows{padding-right:14px} /* keeps the Add/Open buttons clear of the sticky × */
+/* Settings is taller than small windows: keep Cancel/Save in view while it scrolls. */
+#settings .dialog-buttons{position:sticky;bottom:-26px;margin:8px -28px -26px;padding:12px 28px 18px;background:var(--bg);border-top:1px solid var(--btn-border);z-index:1}
