@@ -230,7 +230,7 @@ app.patch('/api/papers/:id', async (req, res) => {
   if (name !== undefined) { p.name = cleanName(name, p.name); p.renamed = true; }
   if (overrides !== undefined) {
     const ok = overrides && typeof overrides === 'object' && !Array.isArray(overrides) && Object.entries(overrides).length <= 2000 &&
-      Object.entries(overrides).every(([k, v]) => /^\d+[a-z]?$/i.test(k) && Number.isInteger(v?.page) && v.page >= 1 && Number.isFinite(v?.y) && v.y >= 0 && v.y <= 1);
+      Object.entries(overrides).every(([k, v]) => /^(?:\d{1,3}(?:\.\d{1,3})?|[A-Z]\.?\d{1,3})[a-z]?$/i.test(k) && Number.isInteger(v?.page) && v.page >= 1 && Number.isFinite(v?.y) && v.y >= 0 && v.y <= 1);
     if (!ok) return res.status(400).json({error: 'Invalid corrections.'});
     p.overrides = Object.fromEntries(Object.entries(overrides).map(([k, v]) => [k, {page: v.page, y: v.y}]));
   }

@@ -64,3 +64,89 @@ test('quotes tolerate small differences and reject unrelated text', () => {
   assert.equal(findQuote(boxes, 'the stiffness matrix of the ball screw nut', W, H), null);
   assert.equal(findQuote(boxes, 'first-order filter on the residual', W, H).dist, 0);
 });
+
+// Fixtures from the equation benchmark (arXiv LaTeX ground truth + ScienceDirect PDFs).
+// Prose set as real text: one item per word, word spaces of 3 px.
+function words(y, text, x0 = 50, x1 = 550) {
+  const ws = text.split(' '), gap = 3, cw = (x1 - x0 - gap * (ws.length - 1)) / ws.join('').length;
+  let x = x0; return ws.map(w => { const b = {s: w, x0: x, x1: x + w.length * cw, y0: y, y1: y + h}; x = b.x1 + gap; return b; });
+}
+const para = (y, n = 4, x0 = 50, x1 = 550) => Array.from({length: n}, (_, i) => words(y + i * 14, 'the quick model of the drive is stiff and the result follows from the measured data here', x0, x1)).flat();
+
+test('labels: years, values and four-digit numbers are not equation numbers', () => {
+  const base = [...para(100), ...para(400)];
+  assert.deepEqual(found([...base, ...line(250, 'Smith J Jones K Precision Engineering 2008', 50, 400), label(250, '(2008)', 520)]), []);
+  assert.deepEqual(found([...base, ...line(250, 'k =', 200, 230), label(250, '(0.5)', 520)]), []);
+});
+
+test('labels: section, appendix and hyphenated numbers; parentheses around a separate digit', () => {
+  const base = [...para(100), ...para(400)];
+  assert.deepEqual(found([...base, ...line(200, 'x = A y', 200), label(200, '(2.14)', 520)]), ['2.14']);
+  assert.deepEqual(found([...base, ...line(200, 'x = A y', 200), label(200, '(A.3)', 520)]), ['A.3']);
+  assert.deepEqual(found([...base, ...line(200, 'x = A y', 200), label(200, '(5-a)', 520)]), ['5a']);
+  // "( )" as one item with the digit drawn between the parentheses in another font
+  assert.deepEqual(found([...base, ...line(200, 'x = A y', 200), {s: '( )', x0: 530, x1: 541, y0: 200, y1: 210}, {s: '7', x0: 533, x1: 538, y0: 200, y1: 210}]), ['7']);
+  // MT Extra parentheses (Elsevier): "ð12Þ"
+  assert.deepEqual(found([...base, ...line(200, 'x ¼ A y þ B', 200), label(200, 'ð12Þ', 520)]), ['12']);
+});
+
+test('labels: algorithm comments and reference lists are not equation numbers', () => {
+  const base = [...para(100), ...para(400)];
+  assert.deepEqual(found([...base, ...line(250, '5: if p < q then ▷', 60, 300), label(250, '(22)', 305)]), []);
+  assert.deepEqual(found([...base, ...line(250, 's.t. (3) ,', 400, 515), label(250, '(23)', 518)]), []);
+  // ...but an equation ending in "x)," before a well-separated number is one
+  assert.deepEqual(found([...base, ...line(250, 'u = m ( e + x ) ,', 100, 300), label(250, '(8)', 520)]), ['8']);
+});
+
+test('labels: a number starting a line in the right column is a list item', () => {
+  // Two columns: 50..290 and 310..550; "(5)" sits left of the page centre line + 6%, text follows it closely.
+  const page = [...para(100, 6, 50, 290), ...para(100, 6, 310, 550), ...words(190, 'operator interactions are bound to handheld', 50, 290),
+    label(190, '(5)', 312), ...words(190, 'Type : The objects type.', 332, 450), ...para(210, 6, 310, 550), ...para(210, 6, 50, 290)];
+  assert.deepEqual(found(page), []);
+});
+
+test('frames: a formula far left of its number on an equation-dense single-column page', () => {
+  // Formula lines leave the page centre empty, so only the two prose lines show it is one column.
+  const page = [...words(80, 'where the voltage between stator and ring is applied to the flexible ring here')];
+  for (let i = 0; i < 8; i++) page.push(...line(105 + 20 * i, `q${i} = 1 / 2 b r`, 60, 200), label(105 + 20 * i, `(${i + 1})`));
+  page.push(...words(270, 'thus the total force per unit arc length of the ring is found as follows'));
+  const eqs = detectEquations(page, W, H);
+  assert.equal(eqs.length, 8);
+  for (const e of eqs) assert.ok(e.box.x0 * W < 70, `frame (${e.label}) starts at ${e.box.x0 * W}, should hold the formula at x=60`);
+});
+
+test('frames: rows of a constraint list with tall sums reaching between rows do not overlap', () => {
+  // Each row: a summation sign taller than the row, the row, its number, and a subscript line below.
+  const page = [...para(100), ...para(250)];
+  [170, 192, 214].forEach((y, i) => page.push({s: '\u2211', x0: 200, x1: 214, y0: y - 4, y1: y + 18}, ...line(y, 'f <= x R', 220, 420), label(y, `(${i + 1})`), ...line(y + 15, 'p in P', 198, 232)));
+  const eqs = detectEquations(page, W, H);
+  assert.equal(eqs.length, 3);
+  for (let i = 1; i < eqs.length; i++) assert.ok(eqs[i - 1].box.y1 <= eqs[i].box.y0 + 1e-9, `frames ${i} and ${i + 1} overlap`);
+});
+
+test('left-side numbers (leqno): found when a page has none on the right; list items are not', () => {
+  const page = [...para(100), label(170, '(3.10)', 60), ...line(170, 'f + e x = s + t w', 200, 420), ...para(200), label(270, '(3.11)', 60), ...line(270, 'g = h', 250, 300), ...para(300)];
+  const eqs = detectEquations(page, W, H);
+  assert.deepEqual(eqs.map(e => e.label), ['3.10', '3.11']);
+  const [a] = eqs;
+  assert.ok(a.box.x0 * W <= 60 && a.box.x1 * W >= 420, 'frame spans number and formula');
+  assert.ok(a.box.y0 * H > 150 && a.box.y1 * H < 195, `frame stays off the paragraphs: ${a.box.y0 * H}-${a.box.y1 * H}`);
+  // "(1) The first step ..." lines are an enumerated list
+  assert.deepEqual(found([...para(100), label(170, '(1)', 60), ...words(170, 'The first step reads the model from the file', 80, 400), ...para(200)]), []);
+});
+
+test('frames: a paragraph line with inline math is not part of the equation above it', () => {
+  const page = [...para(100), ...line(170, 'f = s + t', 250, 350), label(170, '(7)'), ...words(186, 'Note that f >= 0 on R is equivalent to f >= 0 on S for all the points'), ...para(200)];
+  const [e] = detectEquations(page, W, H);
+  assert.ok(e.box.y1 * H < 188, `frame ends above the paragraph line: ${e.box.y1 * H}`);
+});
+
+test('frames: a display spanning both columns of a two-column page is framed whole', () => {
+  // Columns 50..290 and 310..550; the formula runs from x=80 across the gutter, its number in the right column.
+  const page = [...para(100, 6, 50, 290), ...para(100, 6, 310, 550), ...line(200, 'G11 = x1 / u = m2 s2 + c s + k', 80, 300), ...line(200, 'G13 = x1 / d2 = c s + k', 318, 480), label(200, '(5)'),
+    ...para(220, 6, 50, 290), ...para(220, 6, 310, 550)];
+  const [e] = detectEquations(page, W, H);
+  assert.equal(e.label, '5');
+  assert.ok(e.box.x0 * W < 85, `frame starts at ${e.box.x0 * W}`);
+  assert.ok(e.box.y0 * H > 180 && e.box.y1 * H < 220, 'frame stays on the display row');
+});

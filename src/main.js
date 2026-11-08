@@ -752,7 +752,7 @@ async function persist() {
 }
 $('#save').onclick = async () => {
   const eq = $('#equation').value.trim(), page = Number($('#map-page').value), pct = Number($('#map-y').value);
-  if (!doc || !/^\d+[a-z]?$/i.test(eq) || !Number.isInteger(page) || page < 1 || page > doc.numPages || !Number.isFinite(pct) || pct < 0 || pct > 100) { notice('Enter an equation number, valid PDF page, and position from 0–100%.'); return; }
+  if (!doc || !/^(?:\d{1,3}(?:\.\d{1,3})?|[A-Z]\.?\d{1,3})[a-z]?$/i.test(eq) || !Number.isInteger(page) || page < 1 || page > doc.numPages || !Number.isFinite(pct) || pct < 0 || pct > 100) { notice('Enter an equation number, valid PDF page, and position from 0–100%.'); return; }
   overrides[eq] = {page, y: pct / 100};
   if (await persist()) navigate({equation: eq});
 };

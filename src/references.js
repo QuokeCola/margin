@@ -20,14 +20,14 @@ export function resolveReference(ref,index,overrides,pageCount){
 
 // Structured citation tokens written by the model: [[eq:61|p:11]] or [[p:11]]. In project chats the
 // page carries the paper's id prefix (6–64 hex characters): [[eq:61|p:3fa9c2d1:11]], [[p:3fa9c2d1:11]].
-export const TOKEN = /\[\[(?:eq:(\d+[a-z]?)(?:\|p:(?:([0-9a-f]{6,64}):)?(\d+))?|p:(?:([0-9a-f]{6,64}):)?(\d+))\]\]/gi;
+export const TOKEN = /\[\[(?:eq:((?:\d{1,3}(?:\.\d{1,3})?|[A-Z]\.?\d{1,3})[a-z]?)(?:\|p:(?:([0-9a-f]{6,64}):)?(\d+))?|p:(?:([0-9a-f]{6,64}):)?(\d+))\]\]/gi;
 const withPaper = (ref, paper) => paper ? {...ref, paper: paper.toLowerCase()} : ref;
 export const tokenRef = (eq, paper1, p1, paper2, p2) => withPaper({equation: eq || null, page: Number(p1 || p2) || null}, paper1 || paper2);
 
 // Plain-text mentions inside a sentence ("Eq. (61)", "Equations 57–58 on page 11", "p. 4"),
 // returned with their position so they can be turned into links in place.
 // A range links to its first equation.
-const MENTION = /\b(?:eq(?:uation)?s?\.?\s*\(?(\d+[a-z]?)\)?(?:\s*(?:–|-|to|and)\s*\(?\d+[a-z]?\)?)?(?:,?\s*(?:on\s+)?(?:PDF\s+)?(?:page|p\.)\s*(\d+))?|(?:PDF\s+)?(?:page|p\.)\s*(\d+)\b)/gi;
+const MENTION = /\b(?:eq(?:uation)?s?\.?\s*\(?((?:\d{1,3}(?:\.\d{1,3})?|[A-Z]\.?\d{1,3})[a-z]?)\)?(?:\s*(?:–|-|to|and)\s*\(?(?:\d{1,3}(?:\.\d{1,3})?|[A-Z]\.?\d{1,3})[a-z]?\)?)?(?:,?\s*(?:on\s+)?(?:PDF\s+)?(?:page|p\.)\s*(\d+))?|(?:PDF\s+)?(?:page|p\.)\s*(\d+)\b)/gi;
 export function findMentions(text) {
   const out = [];
   for (const m of text.matchAll(MENTION)) out.push({index: m.index, length: m[0].length, ref: {equation: m[1] || null, page: Number(m[2] || m[3]) || null}});
@@ -36,7 +36,7 @@ export function findMentions(text) {
 
 // Paper equation number from a display equation's TeX source, e.g. \tag{61}.
 export function tagOf(tex) {
-  return tex?.match(/\\tag\*?\{\s*\(?(\d+[a-z]?)\)?\s*\}/)?.[1] ?? null;
+  return tex?.match(/\\tag\*?\{\s*\(?((?:\d{1,3}(?:\.\d{1,3})?|[A-Z]\.?\d{1,3})[a-z]?)\)?\s*\}/)?.[1] ?? null;
 }
 
 // Verbatim quotes from the paper: [[quote:7|exact words]] (page, then the words);

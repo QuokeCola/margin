@@ -15,7 +15,9 @@ const words = s => (s.match(/\b[a-z]{3,}\b/g) || []).filter(w => /[aeiouy]/.test
 let totals = {eqs: 0, missing: 0, dups: 0, flags: 0};
 
 for (const file of files) {
-  const doc = await pdfjs.getDocument({data: new Uint8Array(readFileSync(file)), verbosity: 0}).promise;
+  let doc;
+  try { doc = await pdfjs.getDocument({data: new Uint8Array(readFileSync(file)), verbosity: 0}).promise; }
+  catch (e) { console.log(`${basename(file).slice(0, 58).padEnd(58)} unreadable: ${e.message}`); continue; }
   const all = [];
   for (let n = 1; n <= doc.numPages; n++) {
     const page = await doc.getPage(n), vp = page.getViewport({scale: 1}), tc = await page.getTextContent();
@@ -43,7 +45,7 @@ for (const file of files) {
   const dups = Object.entries(counts).filter(([, c]) => c > 1).map(([l, c]) => `${l}×${c}`);
   const flagged = all.filter(e => e.flags.length);
   totals.eqs += all.length; totals.missing += missing.length; totals.dups += dups.length; totals.flags += flagged.length;
-  console.log(`${basename(file).slice(0, 58).padEnd(58)} ${String(all.length).padStart(3)} eqs  max ${String(max).padStart(3)}  missing ${missing.length ? missing.join(',') : '-'}  dups ${dups.length ? dups.join(',') : '-'}  flagged ${flagged.length}`);
+  console.log(`${basename(file).slice(0, 58).padEnd(58)} ${String(all.length).padStart(3)} eqs  max ${String(max).padStart(3)}  missing ${missing.length ? (missing.length > 20 ? `${missing.length} (${missing.slice(0, 10).join(',')},...)` : missing.join(',')) : '-'}  dups ${dups.length ? dups.join(',') : '-'}  flagged ${flagged.length}`);
   if (detail) for (const e of flagged) console.log(`    p${e.page} (${e.label}) ${e.flags.join(', ')} | ${e.text}`);
 }
 console.log(`TOTAL ${totals.eqs} equations, ${totals.missing} missing numbers, ${totals.dups} duplicated labels, ${totals.flags} flagged frames`);
