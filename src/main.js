@@ -16,6 +16,7 @@ import {KEY_ART, CLAUDE_KEY_ART, EXT_ART} from './guides.js';
 import {mergeEquations, legacyBox, normalizeLabel} from '../lib/equations.mjs';
 import {buildEntries, mentionedLabels, cropGeometry, keyOf, CAPS, PNG_MAX, JPEG_QUALITY, IMAGE_MAX} from '../lib/eq-context.mjs';
 import {createEquationEditor} from './eqedit.js';
+import {extractVisuals, stripVisuals, buildSrcdoc, themeVars, clampVisualHeight, visualFileName, VISUAL_START_HEIGHT} from './visuals.js';
 import {LABEL, COMPANY, providerOf, connectionText, composeHint, webTitle, searchNote, keyHint, settingsBody, savingText} from './providers.js';
 pdfjs.GlobalWorkerOptions.workerSrc = worker;
 applyTheme();
@@ -884,31 +885,39 @@ function renderBody(text, linkRefs, whole = false) {
   if (hit) {
     bodyCache.delete(cacheKey); bodyCache.set(cacheKey, hit);
     const body = h('div', {className: 'message-body', innerHTML: hit.html});
+    mountVisuals(body, hit.visuals);
     if (!linkRefs) return body;
     body.querySelectorAll(REF_LINKS).forEach((el, i) => { el.ref = hit.refs[i]; });
     return linkBody(body);
   }
   const body = renderBodyFresh(text, linkRefs, whole);
+  // Cached before the visuals are mounted: the HTML keeps only their empty placeholders, and each
+  // render (fresh or from the cache) builds new iframes from the sources.
   const html = body.innerHTML;
   if (html.length < BODY_CACHE_CHARS / 8) {
-    bodyCache.set(cacheKey, {html, refs: linkRefs ? [...body.querySelectorAll(REF_LINKS)].map(el => el.ref) : null}); bodyCacheChars += html.length;
+    bodyCache.set(cacheKey, {html, refs: linkRefs ? [...body.querySelectorAll(REF_LINKS)].map(el => el.ref) : null, visuals: body.visuals}); bodyCacheChars += html.length;
     for (const [k, v] of bodyCache) { if (bodyCacheChars <= BODY_CACHE_CHARS) break; bodyCache.delete(k); bodyCacheChars -= v.html.length; }
   }
+  mountVisuals(body, body.visuals);
   return body;
 }
 function renderBodyFresh(text, linkRefs, whole) {
   const body = h('div', {className: 'message-body'});
   const math = [], cites = [], quotes = [];
   const anchors = [];
-  let t = linkRefs ? text.replace(QUOTE, (_, id, p, q) => { quotes.push(quoteRef(id, p, q)); return `QUOTEPH${quotes.length - 1}END`; })
-    .replace(ANCHOR, (_, id, p, q) => { anchors.push(quoteRef(id, p, q, true)); return `ANCHPH${anchors.length - 1}END`; }) : text;
+  // Visual blocks are taken out first, so Markdown, maths and citation patterns never touch their source.
+  const {text: rest, visuals} = extractVisuals(text);
+  body.visuals = visuals;
+  let t = linkRefs ? rest.replace(QUOTE, (_, id, p, q) => { quotes.push(quoteRef(id, p, q)); return `QUOTEPH${quotes.length - 1}END`; })
+    .replace(ANCHOR, (_, id, p, q) => { anchors.push(quoteRef(id, p, q, true)); return `ANCHPH${anchors.length - 1}END`; }) : rest;
   t = t.replace(MATH, m => { math.push(m); return `MATHPH${math.length - 1}END`; });
   if (linkRefs) t = t.replace(TOKEN, (_, ...g) => { cites.push(tokenRef(...g.slice(0, 5))); return `CITEPH${cites.length - 1}END`; });
   body.innerHTML = DOMPurify.sanitize(marked.parse(t));
   body.querySelectorAll('img').forEach(img => img.remove());
   body.querySelectorAll('a').forEach(a => { a.rel = 'noopener noreferrer'; a.target = '_blank'; });
   const escape = s => { const span = document.createElement('span'); span.textContent = s; return span.innerHTML; };
-  body.innerHTML = body.innerHTML.replace(/MATHPH(\d+)END/g, (_, i) => escape(math[Number(i)])).replace(/CITEPH(\d+)END/g, (_, i) => `<button type="button" class="cite" data-i="${i}"></button>`).replace(/QUOTEPH(\d+)END/g, (_, i) => `<button type="button" class="quote-link" data-q="${i}"></button>`).replace(/ANCHPH(\d+)END/g, (_, i) => `<button type="button" class="cite anchor" data-a="${i}"></button>`);
+  body.innerHTML = body.innerHTML.replace(/MATHPH(\d+)END/g, (_, i) => escape(math[Number(i)])).replace(/CITEPH(\d+)END/g, (_, i) => `<button type="button" class="cite" data-i="${i}"></button>`).replace(/QUOTEPH(\d+)END/g, (_, i) => `<button type="button" class="quote-link" data-q="${i}"></button>`).replace(/ANCHPH(\d+)END/g, (_, i) => `<button type="button" class="cite anchor" data-a="${i}"></button>`)
+    .replace(/(<pre><code[^>]*>)?(<p>)?VISUALPH(\d+)END\s*(<\/p>)?(<\/code><\/pre>)?/g, (m, pre, p, i, p2, pre2) => `${pre && !pre2 ? pre : ''}${p && !p2 ? p : ''}<div class="visual-slot" data-v="${i}"></div>${p2 && !p ? p2 : ''}${pre2 && !pre ? pre2 : ''}`);
   body.querySelectorAll('button.cite.anchor').forEach(b => { b.ref = anchors[Number(b.dataset.a)]; b.textContent = refLabel(b.ref); b.title = `${b.ref.paper ? 'Open the paper and highlight' : 'Highlight in the paper'}: “${b.ref.quote}”`; });
   body.querySelectorAll('button.quote-link').forEach(b => { b.ref = quotes[Number(b.dataset.q)]; b.append(h('span', {textContent: `“${b.ref.quote}”`}), h('small', {textContent: ` ${paperTag(b.ref)}p. ${b.ref.page} ↗`})); b.title = 'Highlight this passage in the paper'; });
   body.querySelectorAll('button.cite:not(.anchor)').forEach(b => { b.ref = cites[Number(b.dataset.i)]; b.textContent = refLabel(b.ref); b.title = 'Show in the paper'; });
@@ -943,6 +952,85 @@ function renderBodyFresh(text, linkRefs, whole) {
   return linkBody(body);
 }
 
+// ---------- visuals (```visual / ```svg blocks; see visuals.js) ----------
+// Each is a sandboxed iframe (scripts only: opaque origin, no popups, no top navigation) whose
+// document carries a CSP that blocks every request except scripts/styles from three CDNs. The frame
+// reports its height by postMessage; only messages from that frame's own window are accepted.
+const visualFrames = new Map(); // id -> WeakRef(iframe)
+const visualHeights = new Map(); // source -> last height, so a chat opened again does not jump
+let visualSeq = 0;
+const currentTheme = () => {
+  const cs = getComputedStyle(document.documentElement);
+  return {vars: themeVars(t => cs.getPropertyValue(t), cs.fontFamily), scheme: document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light'};
+};
+function visualFrame(v, {register = true, title = 'Visual'} = {}) {
+  const id = register ? ++visualSeq : null;
+  const frame = h('iframe', {className: 'visual-frame', title, loading: 'lazy'});
+  frame.setAttribute('sandbox', 'allow-scripts'); // set before the document: no allow-same-origin, popups or top navigation
+  frame.setAttribute('referrerpolicy', 'no-referrer');
+  frame.srcdoc = buildSrcdoc(v.source, {kind: v.kind, id, ...currentTheme()});
+  frame.visual = v; frame.visualId = id;
+  frame.addEventListener('load', () => { frame.visualLoaded = true; }, {once: true});
+  if (register) {
+    frame.style.height = (visualHeights.get(v.source) ?? VISUAL_START_HEIGHT) + 'px';
+    frame.visualSource = v.source;
+    visualFrames.set(id, new WeakRef(frame));
+    if (visualFrames.size > 64) for (const [k, ref] of visualFrames) if (!ref.deref()) visualFrames.delete(k);
+  }
+  return frame;
+}
+addEventListener('message', e => {
+  const id = e.data?.marginVisual; if (typeof id !== 'number') return;
+  const frame = visualFrames.get(id)?.deref();
+  if (!frame || !e.source || frame.contentWindow !== e.source) return;
+  const height = clampVisualHeight(Number(e.data.height));
+  frame.style.height = height + 'px';
+  visualHeights.delete(frame.visualSource); visualHeights.set(frame.visualSource, height);
+  if (visualHeights.size > 200) visualHeights.delete(visualHeights.keys().next().value);
+});
+// A theme change restyles visuals already on screen (they read the --fg, --accent… variables).
+new MutationObserver(() => {
+  const frames = document.querySelectorAll('iframe.visual-frame'); if (!frames.length) return;
+  const marginTheme = currentTheme();
+  // Frames not loaded yet (lazy, off screen) get a document built with the new colours instead.
+  frames.forEach(f => { if (f.visualLoaded) f.contentWindow?.postMessage({marginTheme}, '*'); else if (f.visual) f.srcdoc = buildSrcdoc(f.visual.source, {kind: f.visual.kind, id: f.visualId, ...marginTheme}); });
+}).observe(document.documentElement, {attributes: true, attributeFilter: ['data-theme']});
+function saveVisual(v) {
+  const data = v.kind === 'svg' ? v.source : buildSrcdoc(v.source, {kind: v.kind, ...currentTheme()});
+  const a = h('a', {href: URL.createObjectURL(new Blob([data], {type: v.kind === 'svg' ? 'image/svg+xml' : 'text/html'})), download: visualFileName(v.source, v.kind)});
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+}
+function openVisual(v) {
+  const close = h('button', {type: 'button', className: 'dialog-x', ariaLabel: 'Close', title: 'Close (Esc)', textContent: '×'});
+  const dialog = h('dialog', {className: 'visual-dialog', ariaLabel: 'Visual'}, h('div', {className: 'dialog-x-bar'}, close), visualFrame(v, {register: false}));
+  close.onclick = () => dialog.close();
+  dialog.addEventListener('close', () => dialog.remove());
+  dialog.addEventListener('click', e => { if (e.target === dialog) dialog.close(); }); // click on the backdrop
+  document.body.append(dialog); dialog.showModal();
+}
+function visualCard(v) {
+  const label = v.kind === 'svg' ? 'SVG' : 'VISUAL';
+  const code = h('pre', {className: 'visual-code', hidden: true}, h('code', {textContent: v.source}));
+  const codeBtn = h('button', {type: 'button', className: 'small', textContent: 'Code', title: 'Show or hide the source'});
+  codeBtn.setAttribute('aria-pressed', 'false');
+  codeBtn.onclick = () => { code.hidden = !code.hidden; codeBtn.setAttribute('aria-pressed', String(!code.hidden)); };
+  const bar = h('div', {className: 'visual-bar'}, h('small', {textContent: label}), codeBtn);
+  if (!v.complete) {
+    // Only an answer cut off mid-visual ends without a closing fence: show what arrived as code.
+    bar.firstChild.textContent = label + ' · INCOMPLETE';
+    code.hidden = false; codeBtn.setAttribute('aria-pressed', 'true');
+    return h('figure', {className: 'visual incomplete'}, bar, h('p', {className: 'visual-note', textContent: 'The answer ended before this visual was finished, so it is not drawn.'}), code);
+  }
+  bar.append(h('button', {type: 'button', className: 'small', textContent: 'Open', title: 'Show larger', onclick: () => openVisual(v)}),
+    h('button', {type: 'button', className: 'small', textContent: v.kind === 'svg' ? 'Save SVG' : 'Save HTML', title: 'Save as a file', onclick: () => saveVisual(v)}));
+  return h('figure', {className: 'visual'}, bar, visualFrame(v), code);
+}
+function mountVisuals(body, visuals) {
+  if (!visuals?.length) return;
+  body.querySelectorAll('div.visual-slot[data-v]').forEach(slot => { const v = visuals[Number(slot.dataset.v)]; if (v) slot.replaceWith(visualCard(v)); });
+}
+
 function addMessage(role, text, meta = {}, scroll = true) {
   $('#messages .chat-empty')?.remove();
   const article = buildMessage(role, text, meta, scroll);
@@ -964,7 +1052,8 @@ function buildMessage(role, text, meta = {}, animate = true) {
     const seen = new Set(), uniq = r => { const k = JSON.stringify(r); if (seen.has(k)) return false; seen.add(k); return true; };
     // Precise anchors first, so "follow chat" jumps to the exact passage. Project chats use only the
     // structured tokens (they name the paper); paper chats also link plain "Eq. (61)" / "p. 4" mentions.
-    const refs = (whole ? structuredRefs(text) : [...structuredRefs(text.replace(TOKEN, '')), ...parseReferences(text.replace(QUOTE, '').replace(ANCHOR, ''))]).filter(uniq); article.refs = refs;
+    const prose = stripVisuals(text);
+    const refs = (whole ? structuredRefs(prose) : [...structuredRefs(prose.replace(TOKEN, '')), ...parseReferences(prose.replace(QUOTE, '').replace(ANCHOR, ''))]).filter(uniq); article.refs = refs;
     if (refs.length) {
       article.append(h('div', {className: 'citations'}, ...refs.map(ref => h('button', {textContent: refLabel(ref), title: ref.paper ? 'Open this paper at the citation' : 'Show in the paper', onclick: () => navigate(ref)}))));
       article.tabIndex = 0;

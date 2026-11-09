@@ -438,3 +438,13 @@ dialog .segmented label{margin:0;display:block;cursor:pointer;position:relative}
 /* Rejecting: the suggestion shrinks and fades away. */
 .eq-frame.rejecting{animation:eq-reject .24s ease-in both;animation-delay:calc(var(--i,0) * 30ms);pointer-events:none}
 @keyframes eq-reject{to{opacity:0;transform:scale(.9);filter:blur(1px)}}
+/* ---------- visuals in answers (```visual / ```svg blocks, rendered in sandboxed iframes) ---------- */
+.visual{margin:14px 0;border:1px solid var(--line-2);border-radius:10px;overflow:hidden;background:var(--bg)}
+.visual-bar{display:flex;align-items:center;gap:6px;padding:4px 6px 4px 12px;border-bottom:1px solid var(--line-2);background:var(--quiet)}
+.visual-bar small{font-size:10px;letter-spacing:1.6px;color:var(--msg-label);margin-right:auto}
+.visual-bar button{padding:2px 9px;font-size:11px}
+.visual-frame{display:block;width:100%;border:0;background:transparent;transition:height var(--quick) var(--ease-out)}
+.message-body .visual-code{margin:0;max-height:360px;border-top:1px solid var(--line-2);font-size:12px;line-height:1.5}
+.visual.incomplete .visual-bar{border-bottom:0}.visual-note{margin:0 12px 10px;font-size:12px;color:var(--hint)}
+.visual-dialog{width:min(1200px,calc(100vw - 48px));height:calc(100dvh - 64px);max-width:none;max-height:none;padding:22px}
+.visual-dialog[open]{display:flex;flex-direction:column}.visual-dialog .visual-frame{flex:1;min-height:0}

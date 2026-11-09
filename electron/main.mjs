@@ -73,6 +73,8 @@ app.whenReady().then(async () => {
   // Links in answers open in the system browser; the window never leaves the local app.
   win.webContents.setWindowOpenHandler(({url}) => { if (/^https?:\/\//.test(url)) shell.openExternal(url); return {action: 'deny'}; });
   win.webContents.on('will-navigate', (e, url) => { if (!url.startsWith(origin)) { e.preventDefault(); if (/^https?:\/\//.test(url)) shell.openExternal(url); } });
+  // Visuals in answers run in sandboxed srcdoc iframes; they may not navigate themselves to other pages.
+  win.webContents.on('will-frame-navigate', e => { if (!e.isMainFrame && !e.url.startsWith(origin) && !/^about:(srcdoc|blank)$/.test(e.url)) e.preventDefault(); });
   await started;
   await win.loadURL(origin + '/');
 }).catch(err => { console.error(err); app.exit(1); });
