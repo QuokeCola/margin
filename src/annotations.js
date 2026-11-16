@@ -519,8 +519,10 @@ export function createAnnotations(app) {
   // ---------- panel ----------
   // The panel folds like the library: the layout changes once, and the panel and the pages slide with
   // transforms (no layout or paint per frame; animating the width re-laid the PDF area on every frame).
-  // Opening: new layout first, both slide from where they were. Closing: both slide over the old layout,
-  // then the panel is hidden.
+  // While it slides the panel lies over the PDF area, which has its full width under it, so the PDF's
+  // scrollbar is covered and uncovered by the panel and never stands apart from it.
+  // Opening: the panel slides in over the old layout and the pages slide to where they will be, then the
+  // PDF area narrows. Closing: the PDF area widens first, under the panel, then both slide.
   let panelFold = null;
   function showPanel(on) {
     panelFold?.(); // finish a fold that is still running
@@ -532,19 +534,22 @@ export function createAnnotations(app) {
     const at = el => { const r = el?.getBoundingClientRect(); return r ? [r.left, r.top] : [0, 0]; }, scrolls = () => pdf.scrollWidth > pdf.clientWidth;
     const mid = pdf.getBoundingClientRect().top + pdf.clientHeight / 2;
     const pageEl = [...document.querySelectorAll('.pdf-page')].find(el => el.getBoundingClientRect().bottom >= mid) || $('.pdf-page');
-    const p0 = at(pageEl), s0 = scrolls(), w0 = panel.offsetWidth;
-    panel.hidden = !on; settle();
-    const p1 = at(pageEl), s1 = scrolls(), w = on ? panel.offsetWidth : w0, dx = p0[0] - p1[0], dy = p0[1] - p1[1];
-    if (!on) panel.hidden = false; // back to the old layout while it slides out
+    // Two layouts: the PDF area beside the panel ("docked") and at full width with the panel over it ("over").
+    if (on) { panel.hidden = false; settle(); }
+    const docked = at(pageEl), dockedScrolls = scrolls(), w = panel.offsetWidth;
+    panel.classList.add('ann-over');
+    const over = at(pageEl), overScrolls = scrolls();
+    const dx = docked[0] - over[0], dy = docked[1] - over[1]; // the docked place of the pages, from their place at full width
     const root = getComputedStyle(document.documentElement), opts = {duration: parseFloat(root.getPropertyValue('--soft')) * 1000 || 380, easing: root.getPropertyValue('--ease-out').trim() || 'ease-out', fill: 'both'};
-    const frames = (x, y, far = {}) => { const a = {transform: `translate(${x}px,${y}px)`, ...far}, b = {transform: 'translate(0,0)', ...(far.opacity != null ? {opacity: 1} : {})}; return on ? [a, b] : [b, {...a, transform: `translate(${on ? x : -x}px,${on ? y : -y}px)`}]; };
-    if (!(on ? s1 : s0)) pdf.style.overflowX = 'hidden'; // the sliding pages must not bring up a scrollbar
-    const anims = [panel.animate(frames(on ? w : -w, 0, {opacity: 0}), opts), ...(pagesEl && (dx || dy) ? [pagesEl.animate(frames(dx, dy), opts)] : [])];
+    const move = (x, y) => ({transform: `translate(${x}px,${y}px)`}), away = move(w, 0), home = move(0, 0); // opaque all the way: it covers the PDF like a curtain
+    if (!overScrolls) pdf.style.overflowX = 'hidden'; // the sliding pages must not bring up a scrollbar
+    const anims = [panel.animate(on ? [away, home] : [home, away], opts),
+      ...(pagesEl && (dx || dy) ? [pagesEl.animate(on ? [move(0, 0), move(dx, dy)] : [move(dx, dy), move(0, 0)], opts)] : [])];
     const end = () => {
       if (panelFold !== end) return;
       panelFold = null;
       if (!on) panel.hidden = true;
-      anims.forEach(a => a.cancel()); pdf.style.overflowX = '';
+      panel.classList.remove('ann-over'); anims.forEach(a => a.cancel()); pdf.style.overflowX = '';
     };
     panelFold = end; anims[0].finished.then(end, end);
   }
