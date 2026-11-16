@@ -303,6 +303,16 @@ body.map-mode .chat,body.map-mode .reader{display:none}
 .sources ol{margin:4px 0 0;padding-left:20px;font-size:12px;line-height:1.7}
 .sources a{color:var(--accent-text)}
 .sources li small{color:var(--faint)}
+.reads{margin-top:12px;padding:8px 0 0;border-top:1px dashed var(--line-2);background:transparent;font-size:12px;animation:fade .3s ease}
+.reads summary{font-size:10px;letter-spacing:1.6px;color:var(--msg-label)}
+.reads ul{margin:6px 0 0;padding-left:20px;line-height:1.7}
+.reads li button{border:0;background:none;padding:0;border-radius:3px;color:var(--accent-text);font-size:12px;line-height:1.5;text-align:left}
+.reads li button:hover{background:none;text-decoration:underline}
+.reads li small{color:var(--faint)}
+.reads p{margin:6px 0 0;font-size:11px;line-height:1.6;color:var(--msg-label)}
+.thinking .reading{list-style:none;margin:8px 0 0;padding:0;font-size:12px;line-height:1.7;color:var(--msg-label)}
+.thinking .reading:empty{display:none}
+.thinking .reading li.done{color:var(--faint)}
 
 /* ---------- themes ---------- */
 /* Map arrowheads (map.js sets the light colours as attributes; CSS lets the theme change them). */
