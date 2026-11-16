@@ -517,11 +517,36 @@ export function createAnnotations(app) {
   $('#note-mode').onclick = () => setPlacing(!placing);
 
   // ---------- panel ----------
+  // The panel folds like the library: the layout changes once, and the panel and the pages slide with
+  // transforms (no layout or paint per frame; animating the width re-laid the PDF area on every frame).
+  // Opening: new layout first, both slide from where they were. Closing: both slide over the old layout,
+  // then the panel is hidden.
+  let panelFold = null;
   function showPanel(on) {
-    $('#ann-panel').hidden = !on; $('#ann-toggle').setAttribute('aria-pressed', on);
+    panelFold?.(); // finish a fold that is still running
+    const panel = $('#ann-panel'), pdf = $('#pdf'), pagesEl = $('#pages'), was = !panel.hidden;
+    $('#ann-toggle').setAttribute('aria-pressed', on);
     try { localStorage.setItem(PANEL_KEY, on ? '1' : ''); } catch {}
-    renderPanel();
-    if (on && selected) select(selected, true);
+    const settle = () => { renderPanel(); if (on && selected) select(selected, true); };
+    if (was === on || !panel.animate || matchMedia('(prefers-reduced-motion: reduce)').matches) { panel.hidden = !on; settle(); return; }
+    const at = el => { const r = el?.getBoundingClientRect(); return r ? [r.left, r.top] : [0, 0]; }, scrolls = () => pdf.scrollWidth > pdf.clientWidth;
+    const mid = pdf.getBoundingClientRect().top + pdf.clientHeight / 2;
+    const pageEl = [...document.querySelectorAll('.pdf-page')].find(el => el.getBoundingClientRect().bottom >= mid) || $('.pdf-page');
+    const p0 = at(pageEl), s0 = scrolls(), w0 = panel.offsetWidth;
+    panel.hidden = !on; settle();
+    const p1 = at(pageEl), s1 = scrolls(), w = on ? panel.offsetWidth : w0, dx = p0[0] - p1[0], dy = p0[1] - p1[1];
+    if (!on) panel.hidden = false; // back to the old layout while it slides out
+    const root = getComputedStyle(document.documentElement), opts = {duration: parseFloat(root.getPropertyValue('--soft')) * 1000 || 380, easing: root.getPropertyValue('--ease-out').trim() || 'ease-out', fill: 'both'};
+    const frames = (x, y, far = {}) => { const a = {transform: `translate(${x}px,${y}px)`, ...far}, b = {transform: 'translate(0,0)', ...(far.opacity != null ? {opacity: 1} : {})}; return on ? [a, b] : [b, {...a, transform: `translate(${on ? x : -x}px,${on ? y : -y}px)`}]; };
+    if (!(on ? s1 : s0)) pdf.style.overflowX = 'hidden'; // the sliding pages must not bring up a scrollbar
+    const anims = [panel.animate(frames(on ? w : -w, 0, {opacity: 0}), opts), ...(pagesEl && (dx || dy) ? [pagesEl.animate(frames(dx, dy), opts)] : [])];
+    const end = () => {
+      if (panelFold !== end) return;
+      panelFold = null;
+      if (!on) panel.hidden = true;
+      anims.forEach(a => a.cancel()); pdf.style.overflowX = '';
+    };
+    panelFold = end; anims[0].finished.then(end, end);
   }
   $('#ann-toggle').onclick = () => showPanel($('#ann-panel').hidden);
   $('#ann-close').onclick = () => { showPanel(false); $('#ann-toggle').focus(); };

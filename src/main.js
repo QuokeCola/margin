@@ -1216,6 +1216,7 @@ $('#web-toggle').onclick = e => {
 // compositor animates without layout or paint; animating the grid columns repainted the chat and the PDF on
 // every frame. Hiding: new layout first, then both slide from where they were. Showing: both slide to where
 // they will be over the old layout, then the new layout replaces it (nothing moves at that moment).
+// The chat column has the same width with and without the library (its text never re-wraps), so it only slides.
 let libFold = null;
 function setLibrary(hidden) {
   libFold?.(); // finish a fold that is still running
@@ -1229,29 +1230,42 @@ function setLibrary(hidden) {
   // (half as far as the reader's edge when they fit); the page nearest the middle of the view is the one looked at.
   const mid = pdf.getBoundingClientRect().top + pdf.clientHeight / 2;
   const pageEl = [...document.querySelectorAll('.pdf-page')].find(el => el.getBoundingClientRect().bottom >= mid) || $('.pdf-page');
-  const c0 = at(chatEl)[0], w0 = chatEl.offsetWidth, p0 = at(pageEl), s0 = scrolls(), top0 = pdf.scrollTop;
+  // What sits in the reader's bars (title, Info, toolbar controls, the corrections bar) is re-placed by the new width too:
+  // each piece slides from where it was, like the pages, so nothing in the reader is seen to jump.
+  const bars = [...document.querySelectorAll('.reader > .section-head > *, .reader > .toolbar > *, #manual > summary')].filter(el => el.offsetWidth);
+  const body0 = $('.reader-body').getBoundingClientRect().top; // where the PDF area starts, under the reader's bars
+  const c0 = at(chatEl)[0], p0 = at(pageEl), b0 = bars.map(at), s0 = scrolls(), top0 = pdf.scrollTop;
   body.classList.toggle('no-library', hidden);
   // The reader's header and toolbar can wrap differently at the new width, which moves the PDF area up or down:
   // scroll by that much, so the pages stay where they are on the screen (what scrolling cannot cover is slid).
   if (pageEl) jump(top0 + at(pageEl)[1] - p0[1]);
-  const top1 = pdf.scrollTop, p1 = at(pageEl), s1 = scrolls();
+  const top1 = pdf.scrollTop, p1 = at(pageEl), s1 = scrolls(), bodyNext = $('.reader-body').getBoundingClientRect().top;
   const dc = c0 - at(chatEl)[0], dx = p0[0] - p1[0], dy = p0[1] - p1[1]; // offsets of the old places from the new ones
-  // The chat column is wider without the library. It slides at its wider width and its right side is clipped
-  // to the narrower one at the library end of the slide, so its edge glides over the page rather than jumping.
-  const cut = Math.abs(chatEl.offsetWidth - w0), clipAt = v => `inset(0 ${v}px 0 0)`;
+  const moved = bars.map((el, k) => { const b = at(el); return [el, b0[k][0] - b[0], b0[k][1] - b[1]]; }).filter(m => Math.abs(m[1]) > .5 || Math.abs(m[2]) > .5);
   if (!hidden) { body.classList.add('no-library', 'lib-in'); jump(top0); } // back to the old layout, the library already fading in under the chat column
   const root = getComputedStyle(document.documentElement), opts = {duration: parseFloat(root.getPropertyValue('--soft')) * 1000 || 380, easing: root.getPropertyValue('--ease-out').trim() || 'ease-out', fill: 'both'};
   const frames = (x, y = 0) => hidden ? [{transform: `translate(${x}px,${y}px)`}, {transform: 'translate(0,0)'}] : [{transform: 'translate(0,0)'}, {transform: `translate(${-x}px,${-y}px)`}];
   if (!(hidden ? s1 : s0)) pdf.style.overflowX = 'hidden'; // the sliding pages must not bring up a scrollbar in the layout they slide over
-  const chatFrames = frames(dc); chatFrames[hidden ? 0 : 1].clipPath = clipAt(cut); chatFrames[hidden ? 1 : 0].clipPath = clipAt(0);
-  const anims = [chatEl.animate(chatFrames, opts), ...(pagesEl && (dx || dy) ? [pagesEl.animate(frames(dx, dy), opts)] : [])];
+  // When the toolbar takes a different number of rows, the PDF area starts higher or lower (body0 before, bodyNext
+  // after). A strip in the toolbar's colours covers the difference and shrinks or grows to the new edge (scaled,
+  // so compositor only), over the PDF and under the sliding controls.
+  let backdrop = null, backdropAnim = [];
+  if (Math.abs(bodyNext - body0) > .5) {
+    const rd = $('.reader').getBoundingClientRect(), top = Math.min(body0, bodyNext) - 1, tall = Math.abs(bodyNext - body0) + 1;
+    backdrop = h('div', {className: 'bars-backdrop'});
+    Object.assign(backdrop.style, {left: rd.left + 'px', width: rd.width + 'px', top: top + 'px', height: tall + 'px'});
+    $('.reader').append(backdrop);
+    const k = edge => ({transform: `scaleY(${(edge - top) / tall})`});
+    backdropAnim = [backdrop.animate([k(body0), k(bodyNext)], opts)];
+  }
+  const anims = [...backdropAnim, chatEl.animate(frames(dc), opts), ...(pagesEl && (dx || dy) ? [pagesEl.animate(frames(dx, dy), opts)] : []), ...moved.map(([el, x, y]) => { el.style.zIndex = 3; return el.animate(frames(x, y), opts); })]; // above the PDF area: a control changing rows passes over it
   const end = () => {
     if (libFold !== end) return;
     libFold = null;
     if (!hidden) { body.classList.remove('no-library', 'lib-in'); jump(top1); }
-    anims.forEach(a => a.cancel()); pdf.style.overflowX = '';
+    anims.forEach(a => a.cancel()); pdf.style.overflowX = ''; moved.forEach(m => { m[0].style.zIndex = ''; }); backdrop?.remove();
   };
-  libFold = end; anims[0].finished.then(end, end);
+  libFold = end; anims.at(-1).finished.then(end, end);
 }
 $('#toggle-library').onclick = () => setLibrary(!document.body.classList.contains('no-library') || document.body.classList.contains('lib-in'));
 try { if (localStorage.getItem('margin-library-hidden')) document.body.classList.add('no-library'); } catch {}
