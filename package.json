@@ -26,6 +26,7 @@
     "dotenv": "^17.2.0",
     "express": "^5.1.0",
     "openai": "^6.0.0",
+    "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^6.5.438"
   },
   "devDependencies": {
@@ -61,7 +62,8 @@
       "!node_modules/pdfjs-dist/legacy/{web,image_decoders}/**",
       "!node_modules/pdfjs-dist/legacy/build/*.{map,min.mjs,d.mts}",
       "!node_modules/pdfjs-dist/legacy/build/pdf.{renderer,sandbox}.mjs",
-      "!node_modules/pdfjs-dist/webpack.mjs"
+      "!node_modules/pdfjs-dist/webpack.mjs",
+      "!node_modules/pdf-lib/{src,es,dist,ts3.4}/**"
     ],
     "electronLanguages": [
       "en-US",

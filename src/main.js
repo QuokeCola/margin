@@ -17,6 +17,7 @@ import {mergeEquations, legacyBox, normalizeLabel} from '../lib/equations.mjs';
 import {buildEntries, mentionedLabels, cropGeometry, keyOf, CAPS, PNG_MAX, JPEG_QUALITY, IMAGE_MAX} from '../lib/eq-context.mjs';
 import {createEquationEditor} from './eqedit.js';
 import {extractVisuals, stripVisuals, buildSrcdoc, themeVars, clampVisualHeight, visualFileName, VISUAL_START_HEIGHT} from './visuals.js';
+import {createAnnotations, COLORS} from './annotations.js';
 import {LABEL, COMPANY, providerOf, connectionText, composeHint, webTitle, searchNote, keyHint, settingsBody, savingText} from './providers.js';
 pdfjs.GlobalWorkerOptions.workerSrc = worker;
 applyTheme();
@@ -34,14 +35,14 @@ $('#app').innerHTML = `<header><button id="toggle-library" class="icon" title="S
 <div class="lib-section"><div class="lib-head"><small>PAPERS</small><label class="file-button small">+ Add PDF<input id="file" type="file" accept="application/pdf"></label></div><ul id="papers" aria-label="Papers"></ul></div>
 <div class="lib-section"><div class="lib-head"><small>CHATS</small><button id="new-chat-side" class="small" title="New chat: about the open paper, or the whole project">+ New</button></div><ul id="chats" aria-label="Chats"></ul></div></aside>
 <section class="chat"><div class="section-head"><div><small id="chat-paper">YOUR STUDY DESK</small><h1 id="chat-title">Read. Question. Understand.</h1></div><button id="new-chat" disabled>New chat</button></div><div id="messages" tabindex="0" aria-label="Conversation"></div><form id="ask"><div id="context" hidden></div><textarea id="question" aria-label="Question about the paper" placeholder="What would you like to understand?" rows="3" maxlength="8000"></textarea><div class="compose-bottom"><span id="compose-hint">Enter to send · Ctrl+Enter for a new line.</span><div class="compose-actions"><button type="button" id="web-toggle" class="web-toggle" aria-pressed="false" title="Let the answer search the web (billed per search). Off by default.">⌕ Web</button><button id="send" type="submit">Ask ↗</button></div></div></form><p id="notice" role="status">Add a PDF, or pick one from the library.</p></section>
-<section class="reader"><div class="section-head"><div><small>SOURCE DOCUMENT</small><h2 id="filename">Your paper, in context</h2><p id="paper-byline"></p></div><button id="paper-info" class="small" disabled title="Paper details: authors, venue, DOI, abstract">ⓘ Info</button></div><div class="toolbar"><label><input id="follow" type="checkbox" checked> Follow chat</label><div><label>Page <input id="page" type="number" min="1" value="1"></label><span id="total">/ —</span><button id="go">Go</button></div><button id="marker" title="Marker: drag a box over any part of the page to ask about it (Esc to cancel)" aria-pressed="false">✎ Mark</button><button id="eq-edit" title="Edit equations: show every equation frame, draw, move, resize, relabel or delete frames, or label them with AI (Esc to finish)" aria-pressed="false">∑ Edit equations</button><div class="zoom" title="Pinch the trackpad (or Ctrl + scroll) over the page to zoom"><button id="zoom-out" aria-label="Zoom out">−</button><button id="zoom-reset" title="Reset to 100%">100%</button><button id="zoom-in" aria-label="Zoom in">+</button></div></div><div id="eq-bar" hidden role="region" aria-label="Edit equations"><div class="eq-bar-row"><p class="eq-bar-hint"><b>Editing equations.</b> Drag on the page to frame an equation · select a frame to move it, resize it by its handles, relabel it (double-click) or delete it (Delete) · Ctrl+Z undoes · Esc finishes</p><div class="eq-bar-actions"><select id="eq-ai-scope" aria-label="Pages to label with AI"><option value="page">This page</option><option value="all">Whole paper</option></select><button id="eq-ai" title="Send page images to the AI provider to find numbered equations; results are suggestions">✦ Label with AI…</button><button id="eq-accept-all" hidden></button><button id="eq-reject-all" hidden>Reject all</button><button id="eq-done" class="primary">Done</button></div></div><div id="eq-progress" hidden><progress max="1" value="0"></progress><span></span><button id="eq-cancel">Cancel</button></div><p id="eq-msg" role="status"></p></div><div id="pdf"><div class="empty"><div class="paper-icon">∑</div><h2>Make room for the original.</h2><p>Add a PDF from your laptop, or pick a paper from the library.<br>Pinch the trackpad over a page to zoom.</p></div></div><details id="manual"><summary>Find a reference / correct an equation location</summary><div class="manual-grid"><label>Equation <input id="equation" placeholder="61"></label><label>PDF page <input id="map-page" type="number" min="1" value="1"></label><label>Position from top (%) <input id="map-y" type="number" min="0" max="100" value="50"></label><button id="find">Find equation</button><button id="save">Save correction</button><button id="remove">Remove correction</button></div><p>Corrections are saved with this paper in your library. Click the PDF while this panel is open to pick a position. Pages use PDF order, not printed journal numbers. For an exact frame, use ∑ Edit equations in the toolbar.</p></details></section>
+<section class="reader"><div class="section-head"><div><small>SOURCE DOCUMENT</small><h2 id="filename">Your paper, in context</h2><p id="paper-byline"></p></div><button id="paper-info" class="small" disabled title="Paper details: authors, venue, DOI, abstract">ⓘ Info</button></div><div class="toolbar"><label><input id="follow" type="checkbox" checked> Follow chat</label><div><label>Page <input id="page" type="number" min="1" value="1"></label><span id="total">/ —</span><button id="go">Go</button></div><button id="marker" title="Marker: drag a box over any part of the page to ask about it (Esc to cancel)" aria-pressed="false">✎ Mark</button><button id="eq-edit" title="Edit equations: show every equation frame, draw, move, resize, relabel or delete frames, or label them with AI (Esc to finish)" aria-pressed="false">∑ Edit equations</button><button id="note-mode" title="Add note: click a spot on the page to leave a sticky note there (Esc to cancel)" aria-pressed="false">✚ Note</button><button id="ann-toggle" title="Comments: the highlights and notes of this paper" aria-pressed="false" aria-controls="ann-panel">▤ Comments</button><div class="zoom" title="Pinch the trackpad (or Ctrl + scroll) over the page to zoom"><button id="zoom-out" aria-label="Zoom out">−</button><button id="zoom-reset" title="Reset to 100%">100%</button><button id="zoom-in" aria-label="Zoom in">+</button></div></div><div id="eq-bar" hidden role="region" aria-label="Edit equations"><div class="eq-bar-row"><p class="eq-bar-hint"><b>Editing equations.</b> Drag on the page to frame an equation · select a frame to move it, resize it by its handles, relabel it (double-click) or delete it (Delete) · Ctrl+Z undoes · Esc finishes</p><div class="eq-bar-actions"><select id="eq-ai-scope" aria-label="Pages to label with AI"><option value="page">This page</option><option value="all">Whole paper</option></select><button id="eq-ai" title="Send page images to the AI provider to find numbered equations; results are suggestions">✦ Label with AI…</button><button id="eq-accept-all" hidden></button><button id="eq-reject-all" hidden>Reject all</button><button id="eq-done" class="primary">Done</button></div></div><div id="eq-progress" hidden><progress max="1" value="0"></progress><span></span><button id="eq-cancel">Cancel</button></div><p id="eq-msg" role="status"></p></div><div class="reader-body"><div id="pdf"><div class="empty"><div class="paper-icon">∑</div><h2>Make room for the original.</h2><p>Add a PDF from your laptop, or pick a paper from the library.<br>Pinch the trackpad over a page to zoom.</p></div></div><aside id="ann-panel" hidden aria-label="Comments"><div class="ann-panel-head"><small>COMMENTS</small><span id="ann-total"></span><button type="button" id="ann-export" class="small" disabled title="Download a copy of the PDF with these highlights, notes and replies written into it; the stored paper is not changed">Export annotated PDF</button><button type="button" id="ann-close" class="icon" aria-label="Close comments" title="Close">×</button></div><div id="ann-list"></div></aside></div><details id="manual"><summary>Find a reference / correct an equation location</summary><div class="manual-grid"><label>Equation <input id="equation" placeholder="61"></label><label>PDF page <input id="map-page" type="number" min="1" value="1"></label><label>Position from top (%) <input id="map-y" type="number" min="0" max="100" value="50"></label><button id="find">Find equation</button><button id="save">Save correction</button><button id="remove">Remove correction</button></div><p>Corrections are saved with this paper in your library. Click the PDF while this panel is open to pick a position. Pages use PDF order, not printed journal numbers. For an exact frame, use ∑ Edit equations in the toolbar.</p></details></section>
 <section id="map-view" hidden aria-label="Citation map"><div class="map-bar"><button id="map-back">← Back to reading</button><div class="map-title"><small>CITATION MAP</small><h2 id="map-project"></h2></div>
 <div class="map-filters"><label><input type="checkbox" id="mf-refs" checked> <i class="dot k-reference"></i>References</label><label><input type="checkbox" id="mf-citing" checked> <i class="dot k-citing"></i>Citing papers</label><label title="Only papers linked to two or more of your papers"><input type="checkbox" id="mf-shared"> Only shared</label><label><input type="checkbox" id="mf-year"> Arrange by year</label><button id="map-fit" class="small" title="Fit the map to the window">Fit</button><button id="map-refresh" class="small" title="Fetch references and citations again">↻</button></div></div>
 <div class="map-body"><svg id="map-svg" role="img" aria-label="Citation graph"></svg><div class="map-legend"><span><i class="dot k-library"></i>In this project</span><span><i class="dot k-reference"></i>Cited by your papers</span><span><i class="dot k-citing"></i>Cites your papers</span><span><i class="dot k-both"></i>Both</span><span class="hint">Arrows point to the cited paper · size = citations · drag to move, scroll to zoom</span></div><p id="map-status" role="status"></p><aside id="map-card" hidden></aside></div></section></main>
 <div id="toast" role="status" aria-live="polite" hidden></div>
 <div id="ref-card" hidden role="dialog" aria-label="Reference"></div>
 <div id="drop-zone" hidden><div>Drop the PDF to add it to the project</div></div>
-<div id="pdf-pop" hidden><button type="button" id="pop-ask">Ask AI ↗</button></div>
+<div id="pdf-pop" hidden><button type="button" id="pop-ask">Ask AI ↗</button><span id="pop-hl" hidden role="group" aria-label="Highlight">${COLORS.map(([name, c]) => `<button type="button" class="ann-swatch" data-color="${c}" style="background:${c}" title="Highlight in ${name.toLowerCase()}" aria-label="Highlight in ${name.toLowerCase()}"></button>`).join('')}<button type="button" id="pop-comment" title="Highlight and write a comment on it">Comment</button></span></div>
 <div id="new-chat-menu" hidden role="menu" aria-label="New chat"><button type="button" role="menuitem" data-scope="paper"><b>This paper</b><small></small></button><button type="button" role="menuitem" data-scope="project"><b>Whole project</b><small>Searches all papers in this project; answers cite each paper</small></button></div>
 <dialog id="ask-text"><form id="ask-text-form"><h2 id="ask-text-title"></h2><label><input id="ask-text-input" autocomplete="off" maxlength="200"></label><div class="dialog-buttons"><button type="button" id="ask-text-cancel">Cancel</button><button type="submit" class="primary">Save</button></div></form></dialog>
 <dialog id="info" aria-label="Paper details"><div class="dialog-x-bar"><button type="button" class="dialog-x" data-close aria-label="Close" title="Close (Esc)">×</button></div><div class="info-body"><div id="info-content"></div><div class="info-lookup"><label>DOI<input id="info-doi" placeholder="10.1109/…" autocomplete="off" spellcheck="false"></label><button type="button" id="info-lookup">Look up</button></div><p id="info-msg" role="status"></p><div class="dialog-buttons"><button type="button" id="info-close" class="primary">Close</button></div></div></dialog>
@@ -90,7 +91,7 @@ async function api(path, opts = {}) {
   let body = opts.body;
   if (body !== undefined && !(body instanceof Uint8Array)) { body = JSON.stringify(body); headers['Content-Type'] = 'application/json'; }
   const r = await fetch(path, {method: opts.method || (body ? 'POST' : 'GET'), headers, body, signal: opts.signal});
-  if (opts.binary) { if (!r.ok) throw Error(`Could not load the PDF (${r.status}).`); return new Uint8Array(await r.arrayBuffer()); }
+  if (opts.binary) { if (!r.ok) throw Object.assign(Error((await r.json().catch(() => null))?.error || `Could not load the PDF (${r.status}).`), {status: r.status}); return new Uint8Array(await r.arrayBuffer()); }
   const data = r.status === 204 ? null : await r.json().catch(() => ({}));
   if (!r.ok) throw Object.assign(Error(data?.error || `Request failed (${r.status}).`), {status: r.status, data});
   return data;
@@ -598,7 +599,7 @@ async function closePaper({keepChat = false} = {}) {
   await renderQueue.catch(() => {});
   await destroyDoc();
   if (!keepChat) chat = null;
-  eqEditor.reset();
+  eqEditor.reset(); ann.reset();
   doc = null; paper = null; pages = []; index = {}; overrides = {}; activeRef = null; pageBoxes = {}; autoByPage = {}; eqByPage = {}; quotePages = {}; setContext(null); hidePop(); setMarking(false); hideRefCard();
   eqEntries = []; cropMemo = new Map(); eqCropping = Promise.resolve();
   bib = {start: null, entries: new Map()}; refHits = {}; refRecords = []; refByNum = new Map(); refsState = 'idle';
@@ -637,6 +638,7 @@ async function openPaper(id, bytes, chatId, {keepChat = isProjectChat(chat) && !
     const meta = await api(`/api/papers/${id}`);
     bytes ??= await api(`/api/papers/${id}/pdf`, {binary: true});
     paper = meta; overrides = meta.overrides || {};
+    ann.open(id); // highlights and notes load beside the PDF
     // One-time move of corrections that older versions kept in browser storage.
     if (!Object.keys(overrides).length) try {
       const old = JSON.parse(localStorage.getItem('margin-' + id) || '{}');
@@ -658,9 +660,9 @@ async function openPaper(id, bytes, chatId, {keepChat = isProjectChat(chat) && !
       autoByPage[n] = detectEquations(boxes, vp.width, vp.height).map(e => ({page: n, y: e.box.y0, x: e.labelBox.x0, box: e.box, label: e.label}));
       const el = h('div', {className: 'pdf-page'}, h('span', {className: 'page-badge', textContent: n}));
       el.dataset.page = n; el.dataset.width = vp.width; el.dataset.height = vp.height; sizePage(el);
-      $('#pages').append(el); pageObserver.observe(el);
+      $('#pages').append(el); pageObserver.observe(el); ann.mount(el);
     }
-    rebuildEquations();
+    rebuildEquations(); ann.docReady();
     const mine = project.chats.filter(c => !isProjectChat(c) && c.paperId === id), pick = mine.find(c => c.id === chatId) || mine[0];
     if (keepChat && chat) showPaperHeader();
     else if (pick) showChat(await api(pathP('chats', pick.id))); else { loading = false; await newChat(); }
@@ -674,6 +676,7 @@ async function openPaper(id, bytes, chatId, {keepChat = isProjectChat(chat) && !
 function sizePage(el) { el.style.width = Number(el.dataset.width) * zoom + 'px'; el.style.height = Number(el.dataset.height) * zoom + 'px'; el.style.setProperty('--total-scale-factor', zoom); }
 const MAX_CANVAS_PIXELS = 12e6; // keeps a single page bitmap under ~48 MB at high zoom
 // Pages within 800 px of the view are rendered; the others are freed. A page that leaves that band
+// (the annotation layer of a page, src/annotations.js, is kept: it is positioned in page fractions)
 // while it waits in the render queue is skipped, and one that leaves while rendering is dropped,
 // so fast scrolling and long smooth jumps do not leave far pages rendered.
 const nearPages = new Set();
@@ -692,7 +695,7 @@ function queueRender(el, force = false) {
     const ratio = Math.min(devicePixelRatio || 1, 2, Math.sqrt(MAX_CANVAS_PIXELS / (base.width * base.height * z * z)));
     const vp = page.getViewport({scale: z * ratio});
     const canvas = h('canvas', {width: Math.floor(vp.width), height: Math.floor(vp.height)});
-    await page.render({canvasContext: canvas.getContext('2d'), viewport: vp}).promise;
+    await page.render({canvasContext: canvas.getContext('2d'), viewport: vp, ...await ann.renderOpts(page)}).promise;
     if (gen !== generation || (!force && !nearPages.has(el))) return;
     const old = el.querySelector('canvas'); if (!old) canvas.className = 'fade-in';
     old?.remove(); el.prepend(canvas); el.dataset.rendered = z;
@@ -829,6 +832,10 @@ function showMarks(el, marks, y, page) {
   endPinch();
   document.querySelectorAll('.pdf-page .highlight').forEach(x => x.remove());
   el.append(...marks);
+  scrollToSpot(el, y, page);
+}
+function scrollToSpot(el, y, page) {
+  endPinch();
   const pdf = $('#pdf'), top = el.offsetTop + y * el.clientHeight - 100;
   pdf.scrollTo({top, behavior: Math.abs(top - pdf.scrollTop) > JUMP_SMOOTH_SCREENS * pdf.clientHeight ? 'instant' : 'smooth'});
   $('#page').value = page;
@@ -1196,7 +1203,7 @@ function chatCrop(pageNum, box) {
     const g = cropGeometry(box, base.width, base.height);
     const canvas = h('canvas', {width: g.w, height: g.h}), c = canvas.getContext('2d');
     c.fillStyle = '#fff'; c.fillRect(0, 0, g.w, g.h);
-    await page.render({canvasContext: c, viewport: page.getViewport({scale: g.scale, offsetX: -g.x, offsetY: -g.y})}).promise;
+    await page.render({canvasContext: c, viewport: page.getViewport({scale: g.scale, offsetX: -g.x, offsetY: -g.y}), ...await ann.renderOpts(page)}).promise;
     let url = canvas.toDataURL('image/png');
     if (url.length > PNG_MAX) url = canvas.toDataURL('image/jpeg', JPEG_QUALITY);
     return url.length <= IMAGE_MAX ? url : null;
@@ -1231,22 +1238,26 @@ $('#remove').onclick = async () => {
 };
 // ---------- PDF interaction: corrections, text selection, equations ----------
 function pageHit(e) {
-  const el = e.target.closest?.('.pdf-page'); if (!el) return null;
+  const el = e.target.closest?.('.pdf-page'); if (!el || e.target.closest('.ann-pop,.ann-layer')) return null; // not through a note or an annotation's popover
   const r = el.getBoundingClientRect(), u = (e.clientX - r.left) / r.width, v = (e.clientY - r.top) / r.height;
   const inside = b => u >= b.x0 && u <= b.x1 && v >= b.y0 && v <= b.y1;
   const ref = (refHits[el.dataset.page] || []).find(q => inside(q.box));
   const eq = ref ? null : (eqByPage[el.dataset.page] || []).find(q => inside(q.box));
   return {el, u, v, eq, ref};
 }
-let popAction = null;
-function showPop(x, y, label, action) {
-  const pop = $('#pdf-pop'); $('#pop-ask').textContent = label; popAction = action;
+// hl ({parts, clear}, for a text selection) adds the highlight colours and "Comment" beside the Ask AI button.
+let popAction = null, popHl = null;
+function showPop(x, y, label, action, hl = null) {
+  const pop = $('#pdf-pop'); $('#pop-ask').textContent = label; popAction = action; popHl = hl;
+  $('#pop-hl').hidden = !hl;
+  for (const b of pop.querySelectorAll('.ann-swatch')) b.setAttribute('aria-pressed', b.dataset.color === ann.color);
   pop.hidden = false;
   const w = pop.offsetWidth, hgt = pop.offsetHeight;
   pop.style.left = Math.min(innerWidth - w - 8, Math.max(8, x - w / 2)) + 'px';
   pop.style.top = (y + hgt + 12 > innerHeight ? y - hgt - 12 : y + 10) + 'px';
 }
-function hidePop() { $('#pdf-pop').hidden = true; popAction = null; }
+function hidePop() { $('#pdf-pop').hidden = true; popAction = null; popHl = null; }
+$('#pop-hl').onclick = e => { const b = e.target.closest('button'), hl = popHl; if (!b || !hl) return; hidePop(); hl.clear(); ann.highlight(hl.parts, b.dataset.color || null, b.id === 'pop-comment'); };
 $('#pop-ask').onclick = async () => { const a = popAction; hidePop(); await a?.(); $('#question').focus(); };
 $('#pdf').addEventListener('scroll', hidePop, {passive: true});
 document.addEventListener('mousedown', e => { if (!e.target.closest('#pdf-pop')) hidePop(); });
@@ -1254,22 +1265,23 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') hidePop(); }
 
 for (const ev of ['pointerup', 'blur']) (ev === 'blur' ? window : document).addEventListener(ev, () => document.querySelectorAll('.textLayer.selecting').forEach(l => l.classList.remove('selecting')));
 $('#pdf').addEventListener('mouseup', e => {
-  if ($('#manual').open || e.button !== 0 || marking || eqEditor.on || Date.now() - markedAt < 400) return;
+  if ($('#manual').open || e.button !== 0 || marking || eqEditor.on || ann.placing || e.target.closest('.ann-pop,.ann-layer') || Date.now() - markedAt < 400) return;
   setTimeout(() => {
     const sel = getSelection(), text = sel.toString().replace(/\s+/g, ' ').trim();
-    const el = sel.anchorNode?.parentElement?.closest('.pdf-page');
+    const el = sel.anchorNode?.parentElement?.closest('.textLayer')?.closest('.pdf-page');
     if (sel.isCollapsed || text.length < 2 || !el) {
       const hit = pageHit(e);
       if (hit?.ref) { showRefCard(hit.ref.nums, e.clientX, e.clientY); return; }
+      if (hit && ann.clickAt(hit.el, hit.u, hit.v)) return; // a highlight: select it and show its comment
       if (hit?.eq) showPop(e.clientX, e.clientY, `Ask AI about Eq. (${hit.eq.label}) ↗`, () => attachEquation(hit.eq));
       return;
     }
     const range = sel.getRangeAt(0), r = range.getBoundingClientRect();
-    const page = Number(el.dataset.page), box = selectionBox(range, el);
+    const page = Number(el.dataset.page), box = selectionBox(range, el), parts = ann.selectionParts(range);
     showPop(r.left + r.width / 2, r.bottom, 'Ask AI about this ↗', async () => {
       sel.removeAllRanges();
       setContext({kind: 'passage', page, text: text.slice(0, 3000), box, image: box ? await cropRegion(page, box) : null});
-    });
+    }, parts.length ? {parts, clear: () => sel.removeAllRanges()} : null);
   }, 0);
 });
 // Outline an equation under the pointer so it reads as clickable.
@@ -1301,7 +1313,7 @@ async function cropRegion(pageNum, box, pad = 6) {
   const wPts = (box.x1 - box.x0) * base.width, scale = Math.min(3, Math.max(1.5, 1600 / Math.max(1, wPts)));
   const vp = page.getViewport({scale});
   const full = h('canvas', {width: Math.floor(vp.width), height: Math.floor(vp.height)});
-  await page.render({canvasContext: full.getContext('2d'), viewport: vp}).promise;
+  await page.render({canvasContext: full.getContext('2d'), viewport: vp, ...await ann.renderOpts(page)}).promise;
   const x = Math.max(0, box.x0 * vp.width - pad), y = Math.max(0, box.y0 * vp.height - pad);
   const w = Math.min(vp.width - x, (box.x1 - box.x0) * vp.width + 2 * pad), hh = Math.min(vp.height - y, (box.y1 - box.y0) * vp.height + 2 * pad);
   const k = Math.min(1, 1600 / w, 2000 / hh), out = h('canvas', {width: Math.round(w * k), height: Math.round(hh * k)}), c = out.getContext('2d');
@@ -1571,7 +1583,7 @@ async function pageImage(n) {
   const page = await doc.getPage(n), base = page.getViewport({scale: 1}), vp = page.getViewport({scale: PAGE_IMAGE_PX / Math.max(base.width, base.height)});
   const canvas = h('canvas', {width: Math.round(vp.width), height: Math.round(vp.height)}), c = canvas.getContext('2d', {willReadFrequently: true});
   c.fillStyle = '#fff'; c.fillRect(0, 0, canvas.width, canvas.height);
-  await page.render({canvasContext: c, viewport: vp}).promise;
+  await page.render({canvasContext: c, viewport: vp, ...await ann.renderOpts(page)}).promise;
   const px = c.getImageData(0, 0, canvas.width, canvas.height).data, gray = new Uint8Array(canvas.width * canvas.height);
   for (let i = 0; i < gray.length; i++) gray[i] = (px[4 * i] * 77 + px[4 * i + 1] * 151 + px[4 * i + 2] * 28) >> 8;
   let dataUrl = canvas.toDataURL('image/png');
@@ -1593,14 +1605,32 @@ const eqEditor = createEquationEditor({
   state: () => ({paper, doc, overrides, auto: autoByPage, byPage: eqByPage, pageBoxes}),
   update: next => { setOverrides(next); },
   providerInfo: () => ({provider: providerOf(session), company: COMPANY[providerOf(session)], model: session?.model, configured: !!session?.configured}),
-  onMode: on => { if (on) { setMarking(false); hidePop(); document.querySelector('.eq-hover')?.remove(); notice('Editing equations: drag on the page to frame one; select a frame to move, resize, relabel or delete it. Esc finishes.'); } },
+  onMode: on => { if (on) { setMarking(false); ann.setPlacing(false); ann.closePop(); hidePop(); document.querySelector('.eq-hover')?.remove(); notice('Editing equations: drag on the page to frame one; select a frame to move, resize, relabel or delete it. Esc finishes.'); } },
+});
+
+// ---------- annotations: highlights, notes, comments panel (src/annotations.js) ----------
+const ann = createAnnotations({
+  pdf: $('#pdf'), h, api, notice, confirmBox, cropRegion, visiblePages, loadMarkdown,
+  state: () => ({doc, pageBoxes}), storageMode: pdfjs.AnnotationMode.ENABLE_STORAGE,
+  renderBody: text => marked ? renderBody(text, true) : null, // AI replies: Markdown + KaTeX, sanitised; page and equation mentions jump in the paper
+  title: () => paperTitle(paper),
+  async jump(page, y) { const el = $(`.pdf-page[data-page="${page}"]`); if (!el) return; await queueRender(el, true); scrollToSpot(el, y, page); },
+  // Render a page again although its zoom did not change (queued, so a render in progress finishes first).
+  rerender(el) { renderQueue = renderQueue.catch(() => {}).then(() => { delete el.dataset.rendered; }); queueRender(el); },
+  attach(c) { setContext(c); $('#question').focus(); notice(`Annotation on PDF page ${c.page} attached. Ask your question, or press Enter to have it explained.`); },
+  save(bytes, name) {
+    const a = h('a', {href: URL.createObjectURL(new Blob([bytes], {type: 'application/pdf'})), download: name});
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+  },
+  onMode: on => { if (on) { setMarking(false); eqEditor.setMode(false); hidePop(); } },
 });
 
 // ---------- marker: drag a box over any area of the page ----------
 let marking = false, draft = null, markedAt = 0;
 function setMarking(on) {
   marking = on; $('#pdf').classList.toggle('marking', on); $('#marker').classList.toggle('active', on); $('#marker').setAttribute('aria-pressed', on);
-  if (on) { eqEditor.setMode(false); hidePop(); notice('Marker: drag a box over the part of the page you want to ask about. Esc cancels.'); }
+  if (on) { eqEditor.setMode(false); ann.setPlacing(false); ann.closePop(); hidePop(); notice('Marker: drag a box over the part of the page you want to ask about. Esc cancels.'); }
   if (!on && draft) { draft.div.remove(); draft = null; }
 }
 $('#marker').onclick = () => setMarking(!marking);

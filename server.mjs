@@ -8,11 +8,12 @@ import {mkdir, readFile, writeFile, rename, readdir, rm, stat} from 'node:fs/pro
 import {KEY_PATTERN, MODEL_PATTERN, PAPER_ID, CHAT_ID, updateEnvText, isTextModel, keyHint, cleanName, chatTitle} from './lib/config.mjs';
 import {createStore, PROJECT_ID} from './lib/store.mjs';
 import {lookupPaper, cleanDoi, worksById, searchWorks, workById, citingWorks, workSummary} from './lib/metadata.mjs';
-import {createIndexer, limiter} from './lib/project-index.mjs';
+import {createIndexer, createExtractPool, limiter} from './lib/project-index.mjs';
 import {projectContext, searchQuery} from './lib/retrieval.mjs';
 import {paperLabels} from './lib/labels.mjs';
 import {PROVIDERS, PROVIDER_NAMES, KEY_VARS, MODEL_VARS, ANTHROPIC_KEY_PATTERN, ANTHROPIC_FALLBACK_MODELS, providerOf, modelOf, createClient, listModels as listProviderModels, answerTurn, visionJSON, labelPrompt, LABEL_INSTRUCTIONS} from './lib/llm.mjs';
 import {cleanOverrides, migrateOverrides, parseAiEquations, mergeEquations} from './lib/equations.mjs';
+import {ANNOTATION_ID, REPLY_ID, LIMITS as ANNOTATION_LIMITS, AI_REPLY_INSTRUCTIONS, AI_REPLY_MAX_TOKENS, aiReplyPrompt} from './lib/annotations.mjs';
 import {validateEquations, planTurn, indexText, imageCaption, keyOf, buildEntries, mentionedLabels, pickImages, CAPS} from './lib/eq-context.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
@@ -154,7 +155,8 @@ async function writeAtomic(file, data, mode = 0o600) { // used for the settings 
   await rename(tmp, file);
 }
 const store = createStore(DATA_DIR);
-const indexer = createIndexer(store);
+const pdfPool = createExtractPool(); // worker threads for pdf.js text extraction and the annotated-PDF export
+const indexer = createIndexer(store, {pool: pdfPool});
 const now = () => new Date().toISOString();
 // Validate route ids; responds and returns false when one is malformed.
 function ids(req, res) {
@@ -343,6 +345,87 @@ app.post('/api/papers/:id/label-equations', async (req, res) => {
     res.status(502).json({fatal: status === 401 || status === 404, error: e.refusal ? 'The model declined this page.' : status === 401 ? 'The API key was rejected. Update it in Settings.' : status === 429 ? `${PROVIDER_NAMES[prov]} quota or rate limit reached.` : status === 529 ? 'The model is overloaded right now.' : status === 404 ? `The model "${used}" is unavailable.` : status === 400 ? `The request was refused (${String(e.message || '').slice(0, 160)}). "${used}" may not read images.` : 'The request failed or timed out.'});
   }
 });
+
+// ---------- annotations (per paper: highlights and notes with comment threads; lib/annotations.mjs) ----------
+// Route ids are checked first; errors thrown by the store carry their status (400 invalid, 404 not found).
+const annotationRoute = fn => async (req, res) => {
+  if (!ids(req, res)) return;
+  const {aid, rid} = req.params;
+  if ((aid !== undefined && !ANNOTATION_ID.test(aid)) || (rid !== undefined && !REPLY_ID.test(rid))) return res.status(400).json({error: 'Invalid id.'});
+  try { await fn(req, res); }
+  catch (e) { if (e.status >= 400 && e.status < 500 && !res.headersSent) return res.status(e.status).json({error: e.message}); throw e; }
+};
+app.get('/api/papers/:id/annotations', annotationRoute(async (req, res) => {
+  if (!(await store.loadPaper(req.params.id))) return res.status(404).json({error: 'Paper not found.'});
+  const {items, imported} = await store.loadAnnotations(req.params.id);
+  res.json({items, imported});
+}));
+app.post('/api/papers/:id/annotations', annotationRoute(async (req, res) => res.json(await store.addAnnotation(req.params.id, req.body))));
+// Annotations the app found inside the PDF file; each is taken once (by its pdfId).
+app.post('/api/papers/:id/annotations/import', annotationRoute(async (req, res) => res.json(await store.importAnnotations(req.params.id, req.body?.items))));
+app.patch('/api/papers/:id/annotations/:aid', annotationRoute(async (req, res) => res.json(await store.patchAnnotation(req.params.id, req.params.aid, req.body))));
+app.delete('/api/papers/:id/annotations/:aid', annotationRoute(async (req, res) => { await store.deleteAnnotation(req.params.id, req.params.aid); res.sendStatus(204); }));
+app.post('/api/papers/:id/annotations/:aid/replies', annotationRoute(async (req, res) => {
+  if (typeof req.body?.text !== 'string') return res.status(400).json({error: 'The reply is empty.'});
+  res.json(await store.addReply(req.params.id, req.params.aid, {text: req.body.text}));
+}));
+app.delete('/api/papers/:id/annotations/:aid/replies/:rid', annotationRoute(async (req, res) => res.json(await store.deleteReply(req.params.id, req.params.aid, req.params.rid))));
+
+// "Make AI answer this": the chat model replies to a comment thread, given the paper's details, the page's
+// text with a little of the neighbouring pages, the highlighted passage and the thread. One reply at a time per annotation.
+const aiReplying = new Set(); // `${paperId}:${annotationId}`
+app.post('/api/papers/:id/annotations/:aid/ai-reply', annotationRoute(async (req, res) => {
+  const prov = provider(), apiKey = apiKeyOf(prov), used = model(prov);
+  if (!apiKey) return res.status(503).json({error: `Add your ${PROVIDER_NAMES[prov]} API key in Settings.`});
+  const paper = await store.loadPaper(req.params.id);
+  if (!paper) return res.status(404).json({error: 'Paper not found.'});
+  const a = (await store.loadAnnotations(paper.id)).items.find(x => x.id === req.params.aid);
+  if (!a) return res.status(404).json({error: 'Annotation not found.'});
+  if (!a.comment && !a.replies.length && !a.text) return res.status(400).json({error: 'Write a comment first, so there is something to answer.'});
+  if (a.replies.length >= ANNOTATION_LIMITS.replies) return res.status(400).json({error: `A comment can have at most ${ANNOTATION_LIMITS.replies} replies.`});
+  const key = `${paper.id}:${a.id}`;
+  if (aiReplying.has(key)) return res.status(429).json({error: 'An AI reply to this comment is already being written.'});
+  aiReplying.add(key);
+  const abort = new AbortController();
+  res.on('close', () => { if (!res.writableEnded) abort.abort(); });
+  try {
+    let result;
+    try {
+      // Without page text (a PDF that cannot be read) the model still gets the passage and the thread.
+      const text = await indexer.pageText(paper.id).catch(e => { console.warn('Page text failed for', paper.id.slice(0, 8), e.message); return null; });
+      if (abort.signal.aborted) return;
+      const {source, question} = aiReplyPrompt(paper, a, text?.pages);
+      result = await answerTurn(prov, {apiKey, model: used, instructions: AI_REPLY_INSTRUCTIONS, source, history: [], question, cache: 'system',
+        maxTokens: AI_REPLY_MAX_TOKENS, signal: abort.signal});
+    } catch (e) {
+      if (abort.signal.aborted) return;
+      const status = e.status;
+      if (!status && !e.refusal) console.error('AI reply failed:', e.message);
+      return res.status(502).json({error: e.refusal ? 'Claude declined to answer this request. Rephrase it, or try another model.' : status === 401 ? 'The API key was rejected. Update it in Settings.' : status === 429 ? `${PROVIDER_NAMES[prov]} quota or rate limit reached. Check your API account and try again.` : status === 529 ? 'Claude is overloaded right now. Try again in a moment.' : status === 404 ? `The model "${used}" is unavailable. Pick another in the model menu.` : 'The model request failed or timed out. Check your connection and model access; try again.'});
+    }
+    if (abort.signal.aborted) return; // the app cancelled: nothing is saved
+    // Saved onto the thread as it is now (404 when the annotation was deleted meanwhile).
+    res.json(await store.addReply(paper.id, a.id, {text: result.text, author: 'ai', model: result.model || used}));
+  } finally { aiReplying.delete(key); }
+}));
+
+// The PDF with the annotations written in as PDF annotations (lib/pdf-annotate.mjs), built in memory in a
+// worker thread; the stored PDF is never changed. Without annotations the stored file is sent as it is.
+app.get('/api/papers/:id/annotated.pdf', annotationRoute(async (req, res) => {
+  const paper = await store.loadPaper(req.params.id);
+  const {root: dir, file} = store.pdfPath(req.params.id);
+  if (!paper || !(await stat(join(dir, file)).catch(() => null))) return res.status(404).json({error: 'PDF not found.'});
+  const {items, importedPdfIds} = await store.loadAnnotations(paper.id);
+  const name = `${cleanName(paper.name).replace(/[\\/:*?"<>|]/g, '_').slice(0, 150)} (annotated).pdf`;
+  if (!items.length && !importedPdfIds.length) return res.type('application/pdf').attachment(name).sendFile(file, {root: dir, dotfiles: 'allow'});
+  const out = await pdfPool.run('annotate', join(dir, file), {items, importedPdfIds}).catch(e => ({error: 'unreadable', detail: e.message}));
+  if (out.error) {
+    if (out.error !== 'encrypted') console.error('Annotated PDF failed:', out.detail || out.error);
+    return res.status(422).json({error: out.error === 'encrypted' ? 'This PDF is encrypted (password or permission protected), so annotations cannot be written into a copy of it.' : 'This PDF could not be rewritten with its annotations.'});
+  }
+  res.setHeader('X-Annotations-Written', String(out.written)); res.setHeader('X-Annotations-Skipped', String(out.skipped));
+  res.type('application/pdf').attachment(name).send(Buffer.from(out.pdf.buffer, out.pdf.byteOffset, out.pdf.byteLength));
+}));
 
 // Look up bibliographic metadata. The client sends DOI candidates and a title guess from the PDF;
 // a DOI typed by the user takes precedence. Misses are remembered so they are not retried on every open.
