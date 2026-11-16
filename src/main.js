@@ -1223,23 +1223,32 @@ function setLibrary(hidden) {
   try { localStorage.setItem('margin-library-hidden', hidden ? '1' : ''); } catch {}
   if (body.classList.contains('no-library') === hidden) return;
   if (!chatEl.animate || matchMedia('(max-width:800px), (prefers-reduced-motion: reduce)').matches) { body.classList.toggle('no-library', hidden); return; }
-  const left = el => el ? el.getBoundingClientRect().left : 0, scrolls = () => pdf.scrollWidth > pdf.clientWidth;
+  const at = el => { const r = el?.getBoundingClientRect(); return r ? [r.left, r.top] : [0, 0]; }, scrolls = () => pdf.scrollWidth > pdf.clientWidth;
+  const jump = top => pdf.scrollTo({top, behavior: 'instant'}); // #pdf scrolls smoothly by default
   // The page column spans the reader and the pages are centred in it, so a page tells how far the pages move
   // (half as far as the reader's edge when they fit); the page nearest the middle of the view is the one looked at.
   const mid = pdf.getBoundingClientRect().top + pdf.clientHeight / 2;
   const pageEl = [...document.querySelectorAll('.pdf-page')].find(el => el.getBoundingClientRect().bottom >= mid) || $('.pdf-page');
-  const c0 = left(chatEl), p0 = left(pageEl), s0 = scrolls();
+  const c0 = at(chatEl)[0], w0 = chatEl.offsetWidth, p0 = at(pageEl), s0 = scrolls(), top0 = pdf.scrollTop;
   body.classList.toggle('no-library', hidden);
-  const dc = c0 - left(chatEl), dp = p0 - left(pageEl), clip = !s0 && !scrolls(); // offsets of the old places from the new ones
-  if (!hidden) body.classList.add('no-library', 'lib-in'); // back to the old layout, the library already fading in under the chat column
+  // The reader's header and toolbar can wrap differently at the new width, which moves the PDF area up or down:
+  // scroll by that much, so the pages stay where they are on the screen (what scrolling cannot cover is slid).
+  if (pageEl) jump(top0 + at(pageEl)[1] - p0[1]);
+  const top1 = pdf.scrollTop, p1 = at(pageEl), s1 = scrolls();
+  const dc = c0 - at(chatEl)[0], dx = p0[0] - p1[0], dy = p0[1] - p1[1]; // offsets of the old places from the new ones
+  // The chat column is wider without the library. It slides at its wider width and its right side is clipped
+  // to the narrower one at the library end of the slide, so its edge glides over the page rather than jumping.
+  const cut = Math.abs(chatEl.offsetWidth - w0), clipAt = v => `inset(0 ${v}px 0 0)`;
+  if (!hidden) { body.classList.add('no-library', 'lib-in'); jump(top0); } // back to the old layout, the library already fading in under the chat column
   const root = getComputedStyle(document.documentElement), opts = {duration: parseFloat(root.getPropertyValue('--soft')) * 1000 || 380, easing: root.getPropertyValue('--ease-out').trim() || 'ease-out', fill: 'both'};
-  const frames = d => hidden ? [{transform: `translateX(${d}px)`}, {transform: 'translateX(0)'}] : [{transform: 'translateX(0)'}, {transform: `translateX(${-d}px)`}];
-  if (clip) pdf.style.overflowX = 'hidden'; // the sliding pages must not bring up a scrollbar
-  const anims = [chatEl.animate(frames(dc), opts), ...(pagesEl && dp ? [pagesEl.animate(frames(dp), opts)] : [])];
+  const frames = (x, y = 0) => hidden ? [{transform: `translate(${x}px,${y}px)`}, {transform: 'translate(0,0)'}] : [{transform: 'translate(0,0)'}, {transform: `translate(${-x}px,${-y}px)`}];
+  if (!(hidden ? s1 : s0)) pdf.style.overflowX = 'hidden'; // the sliding pages must not bring up a scrollbar in the layout they slide over
+  const chatFrames = frames(dc); chatFrames[hidden ? 0 : 1].clipPath = clipAt(cut); chatFrames[hidden ? 1 : 0].clipPath = clipAt(0);
+  const anims = [chatEl.animate(chatFrames, opts), ...(pagesEl && (dx || dy) ? [pagesEl.animate(frames(dx, dy), opts)] : [])];
   const end = () => {
     if (libFold !== end) return;
     libFold = null;
-    if (!hidden) body.classList.remove('no-library', 'lib-in');
+    if (!hidden) { body.classList.remove('no-library', 'lib-in'); jump(top1); }
     anims.forEach(a => a.cancel()); pdf.style.overflowX = '';
   };
   libFold = end; anims[0].finished.then(end, end);
