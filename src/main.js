@@ -1212,7 +1212,35 @@ $('#web-toggle').onclick = e => {
   webSearch = !webSearch; e.currentTarget.setAttribute('aria-pressed', webSearch);
   notice(webSearch ? 'Web search on: answers may search the web and list their sources (billed per search).' : 'Web search off: answers use the papers only.');
 };
-$('#toggle-library').onclick = () => { const hidden = document.body.classList.toggle('no-library'); try { localStorage.setItem('margin-library-hidden', hidden ? '1' : ''); } catch {} };
+// Library fold. The layout changes once and the chat column and the pages slide with transforms, which the
+// compositor animates without layout or paint; animating the grid columns repainted the chat and the PDF on
+// every frame. Hiding: new layout first, then both slide from where they were. Showing: both slide to where
+// they will be over the old layout, then the new layout replaces it (nothing moves at that moment).
+let libFold = null;
+function setLibrary(hidden) {
+  libFold?.(); // finish a fold that is still running
+  const body = document.body, chatEl = $('main > .chat'), pagesEl = $('#pages'), pdf = $('#pdf');
+  try { localStorage.setItem('margin-library-hidden', hidden ? '1' : ''); } catch {}
+  if (body.classList.contains('no-library') === hidden) return;
+  if (!chatEl.animate || matchMedia('(max-width:800px), (prefers-reduced-motion: reduce)').matches) { body.classList.toggle('no-library', hidden); return; }
+  const left = el => el ? el.getBoundingClientRect().left : 0, scrolls = () => pdf.scrollWidth > pdf.clientWidth;
+  const c0 = left(chatEl), p0 = left(pagesEl), s0 = scrolls();
+  body.classList.toggle('no-library', hidden);
+  const dc = c0 - left(chatEl), dp = p0 - left(pagesEl), clip = !s0 && !scrolls(); // offsets of the old places from the new ones
+  if (!hidden) body.classList.add('no-library', 'lib-in'); // back to the old layout, the library already fading in under the chat column
+  const root = getComputedStyle(document.documentElement), opts = {duration: parseFloat(root.getPropertyValue('--soft')) * 1000 || 380, easing: root.getPropertyValue('--ease-out').trim() || 'ease-out', fill: 'both'};
+  const frames = d => hidden ? [{transform: `translateX(${d}px)`}, {transform: 'translateX(0)'}] : [{transform: 'translateX(0)'}, {transform: `translateX(${-d}px)`}];
+  if (clip) pdf.style.overflowX = 'hidden'; // the sliding pages must not bring up a scrollbar
+  const anims = [chatEl.animate(frames(dc), opts), ...(pagesEl && dp ? [pagesEl.animate(frames(dp), opts)] : [])];
+  const end = () => {
+    if (libFold !== end) return;
+    libFold = null;
+    if (!hidden) body.classList.remove('no-library', 'lib-in');
+    anims.forEach(a => a.cancel()); pdf.style.overflowX = '';
+  };
+  libFold = end; anims[0].finished.then(end, end);
+}
+$('#toggle-library').onclick = () => setLibrary(!document.body.classList.contains('no-library') || document.body.classList.contains('lib-in'));
 try { if (localStorage.getItem('margin-library-hidden')) document.body.classList.add('no-library'); } catch {}
 
 // ---------- corrections ----------

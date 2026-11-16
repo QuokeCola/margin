@@ -88,9 +88,13 @@ button:not(:disabled):active,.file-button:active{transform:scale(.97)}
 @keyframes unfold{from{opacity:0;transform:translateY(-6px) scaleY(.96)}to{opacity:1;transform:none}}
 .chats li.active .chat-name{box-shadow:inset 3px 0 0 var(--green)}
 .paper-name:hover,.chat-name:hover,.add-chat:hover{background:var(--row-hover)}
-main{transition:grid-template-columns var(--soft) var(--ease-out)}
+/* Library fold: the grid changes in one step and the chat column and the pages slide with transforms (setLibrary in main.js);
+   animating the grid itself repainted the chat and the PDF on every frame. The library keeps its width under the chat column,
+   which covers and uncovers it; the chat column is above the reader too, so the reader's edge is never seen to jump. */
+@media(min-width:801px){aside.library{min-width:250px}main>.reader{z-index:1}main>.chat{z-index:2;background:var(--bg)}}
 .library{transition:opacity .25s ease,visibility 0s}
 body.no-library aside.library{opacity:0;transition:opacity .25s ease,visibility 0s .25s}
+body.no-library.lib-in aside.library{opacity:1;visibility:visible;transition:opacity .25s ease,visibility 0s}
 
 /* reader */
 .pdf-page canvas.fade-in{animation:fade .35s ease both}
