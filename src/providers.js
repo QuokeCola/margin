@@ -15,12 +15,13 @@ export function connectionText(status) {
 
 // Composer hint. A project chat with Claude and an OpenAI key also sends the papers and the question to
 // OpenAI to embed them for passage search (without that key the search is by keywords, on this computer).
-export function composeHint(status, projectChat) {
+// `others`: the project has more papers than the one open; the model may read (and so be sent) pages of them.
+export function composeHint(status, projectChat, {others = false} = {}) {
   const p = providerOf(status), to = COMPANY[p];
   const keys = 'Enter to send · Ctrl+Enter for a new line. ';
-  if (!projectChat) return `${keys}Paper text + this chat are sent to ${to}.`;
+  if (!projectChat) return `${keys}Paper text + this chat are sent to ${to}${others ? ', and pages of the project\'s other papers when the answer reads them' : ''}.`;
   const embedOpenAI = p === 'anthropic' && status?.embeddings === 'openai';
-  return `${keys}Passages from this project's papers + this chat are sent to ${to}${embedOpenAI ? '; papers and questions also go to OpenAI for passage search' : ''}.`;
+  return `${keys}Passages and the pages the answer reads from this project's papers + this chat are sent to ${to}${embedOpenAI ? '; papers and questions also go to OpenAI for passage search' : ''}.`;
 }
 
 export const webTitle = status => `Let the answer search the web (${COMPANY[providerOf(status)]} web search, billed per search). Off by default.`;

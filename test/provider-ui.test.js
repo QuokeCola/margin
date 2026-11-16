@@ -27,6 +27,10 @@ test('composer hint says where data goes', () => {
   assert.match(composeHint(status('anthropic', false, true), true), /sent to Anthropic\.$/); // keyword search: nothing to OpenAI
   assert.match(composeHint(status('anthropic', true, true), true), /sent to Anthropic; papers and questions also go to OpenAI for passage search\.$/);
   assert.match(composeHint(status('openai', true, true), true), /papers \+ this chat are sent to OpenAI\.$/);
+  // The answer may read other papers of the project: said when the project has any, and in project chats.
+  assert.match(composeHint(status('anthropic', false, true), false, {others: true}), /Paper text \+ this chat are sent to Anthropic, and pages of the project's other papers when the answer reads them\.$/);
+  assert.match(composeHint(status('openai', true, false), false, {others: false}), /Paper text \+ this chat are sent to OpenAI\.$/);
+  assert.match(composeHint(status('openai', true, true), true), /Passages and the pages the answer reads from this project's papers \+ this chat are sent to OpenAI\.$/);
   assert.doesNotMatch(webTitle(status('anthropic', true, true)), /OpenAI/);
   assert.match(webTitle(status('openai', true, false)), /OpenAI web search/);
 });

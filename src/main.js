@@ -7,6 +7,7 @@ import './style.css';
 import './guides.css';
 import {parseReferences, resolveReference, TOKEN, tokenRef, findMentions, tagOf, QUOTE, ANCHOR, quoteRef, structuredRefs} from './references.js';
 import {paperLabels, resolvePaper, shortId} from '../lib/labels.mjs';
+import {pagesLabel} from '../lib/paper-tool.mjs';
 import {textBoxes, detectEquations} from './layout.js';
 import {preparePage, locateQuote} from './quote.js';
 import {parseBibliography, findMarkers, matchEntries} from './bib.js';
@@ -97,6 +98,8 @@ async function api(path, opts = {}) {
   return data;
 }
 
+// Where the chat's data goes; with other papers in the project the answer may read (and so send) those too.
+const showComposeHint = () => { $('#compose-hint').textContent = composeHint(session, isProjectChat(chat), {others: (project?.papers.length || 0) > 1}); };
 function controls() {
   $('#send').disabled = !chat || (!doc && !isProjectChat(chat)) || working || loading;
   $('#file').disabled = working || loading;
@@ -125,7 +128,7 @@ function showStatus() {
   sel.title = modelLists[p]?.fallback ? `Model used for new answers. ${COMPANY[p]}'s model list could not be loaded; these are suggested models.` : 'Model used for new answers';
   sel.disabled = !session?.configured || working;
   $('#web-toggle').title = webTitle(session);
-  $('#compose-hint').textContent = composeHint(session, isProjectChat(chat));
+  showComposeHint();
 }
 async function fetchModels(p) {
   delete modelLists[p];
@@ -269,7 +272,7 @@ window.addEventListener('focus', announceProject);
 async function refreshProject() {
   if (!project) return;
   const before = project.papers.map(p => p.id).sort().join(',');
-  project = await api(pathP()); renderLibrary();
+  project = await api(pathP()); renderLibrary(); showComposeHint();
   if (project.papers.map(p => p.id).sort().join(',') !== before && mapProject === project.id) {
     mapStale = true;
     if (!$('#map-view').hidden) openMap();
@@ -469,7 +472,7 @@ function showChat(c) {
   $('#chat-title').textContent = c.title;
   $('#messages').replaceChildren();
   const whole = isProjectChat(c);
-  $('#compose-hint').textContent = composeHint(session, whole);
+  showComposeHint();
   showPaperHeader();
   if (!c.messages.length) $('#messages').append(h('div', {className: 'chat-empty'},
     h('p', {textContent: whole ? `Ask across all ${project.papers.length} paper${project.papers.length === 1 ? '' : 's'} of “${project.name}”. Margin searches them for the passages that matter; each citation names its paper, and selecting it opens that paper at the passage.` : 'Ask anything about this paper. Answers cite PDF pages and equations; select a citation to bring the source into view.'}),
@@ -515,7 +518,9 @@ function showPaperHeader() {
   const t = paper ? paperTitle(paper) : 'Your paper, in context';
   $('#filename').textContent = t; $('#filename').title = t;
   $('#paper-byline').textContent = paper?.meta ? byline(paper.meta) : '';
-  $('#chat-paper').textContent = isProjectChat(chat) && project ? `WHOLE PROJECT · ${project.name.toUpperCase()}` : paper ? t.toUpperCase() : 'YOUR STUDY DESK';
+  // A chat about one paper keeps that paper's name while a citation of another paper is open in the reader.
+  const home = !isProjectChat(chat) && chat?.paperId && chat.paperId !== paper?.id ? project?.papers.find(p => p.id === chat.paperId) : null;
+  $('#chat-paper').textContent = isProjectChat(chat) && project ? `WHOLE PROJECT · ${project.name.toUpperCase()}` : home ? paperTitle(home).toUpperCase() : paper ? t.toUpperCase() : 'YOUR STUDY DESK';
   $('#paper-info').disabled = !paper;
 }
 // DOI candidates and a title guess (the largest text near the top of page 1) for the lookup.
@@ -791,24 +796,27 @@ $('#zoom-reset').onclick = () => setZoom(1);
 $('#zoom-reset').textContent = Math.round(zoom * 100) + '%';
 
 // ---------- citations ----------
-// A citation of a project chat names its paper (ref.paper, an id prefix); that paper is opened first
-// unless switchPaper is false (automatic following only moves within the open paper).
-const refPaper = ref => ref.paper ? resolvePaper(ref.paper, project?.papers || []) : null;
-const isLocal = ref => !ref.paper || refPaper(ref)?.id === paper?.id;
+// A citation may name its paper (ref.paper, an id prefix): always in a project chat, and in a paper chat
+// for another paper of the project that the answer read. One without a name belongs to the chat's own
+// paper, which is not the open one after such a citation was followed. The citation's paper is opened
+// first unless switchPaper is false (automatic following only moves within the open paper).
+const homePaper = () => !isProjectChat(chat) && chat?.paperId ? project?.papers.find(p => p.id === chat.paperId) || null : null;
+const refPaper = ref => ref.paper ? resolvePaper(ref.paper, project?.papers || []) : homePaper();
+const isLocal = ref => { const t = refPaper(ref); return t ? t.id === paper?.id : !ref.paper; };
 // Automatic following (switchPaper false) stands back while a paper loads and just after the user
 // picked a citation, so focusing or scrolling the answer does not move away from the chosen passage.
 let pickedAt = 0;
 async function navigate(ref, {switchPaper = true} = {}) {
   if (switchPaper) pickedAt = Date.now();
   else if (loading || Date.now() - pickedAt < 1500) return;
-  if (ref.paper) {
-    const target = refPaper(ref);
-    if (!target) { notice('That paper is no longer in this project.'); return; }
-    if (target.id !== paper?.id) {
+  const owner = refPaper(ref);
+  if (ref.paper || owner) {
+    if (!owner) { notice('That paper is no longer in this project.'); return; }
+    if (owner.id !== paper?.id) {
       if (!switchPaper) return;
       if (working || loading) { notice('Wait for the answer to finish, then select the citation again.'); return; }
-      await openPaper(target.id, null, null, {keepChat: true});
-      if (paper?.id !== target.id) return;
+      await openPaper(owner.id, null, null, {keepChat: true});
+      if (paper?.id !== owner.id) return;
     }
   }
   if (!doc) return;
@@ -1071,11 +1079,38 @@ function buildMessage(role, text, meta = {}, animate = true) {
       article.addEventListener('focus', () => { if (article.skipFocus) { article.skipFocus = false; return; } const r = local(); if (r) navigate(r, {switchPaper: false}); });
       article.addEventListener('click', e => { const r = local(); if (r && !e.target.closest('button,a,.eq-link') && !getSelection().toString()) navigate(r, {switchPaper: false}); });
     }
+    if (meta.reads?.length) article.append(readsRecord(meta));
     if (meta.sources?.length) article.append(h('div', {className: 'sources'}, h('small', {textContent: 'WEB SOURCES'}),
       h('ol', {}, ...meta.sources.map(src => { let host = ''; try { host = new URL(src.url).hostname.replace(/^www\./, ''); } catch {}
         return h('li', {}, h('a', {href: src.url, target: '_blank', rel: 'noopener noreferrer', textContent: src.title || host || src.url}), host && src.title ? h('small', {textContent: ' · ' + host}) : ''); }))));
   }
   return article;
+}
+// What the model read for an answer (read_paper), collapsed under it: each paper with its pages, opening
+// the paper at the first of them.
+function readsRecord(meta) {
+  const reads = meta.reads.filter(r => r && typeof r.paper === 'string' && Number.isInteger(r.from) && Number.isInteger(r.to));
+  const papersRead = new Set(reads.map(r => r.paper)).size, pagesRead = reads.reduce((n, r) => n + r.to - r.from + 1, 0);
+  const item = r => {
+    const p = resolvePaper(r.paper, project?.papers || []), name = [r.label, r.title && r.title !== r.label && `“${r.title}”`].filter(Boolean).join(' · ') || `Paper ${r.paper}`;
+    return h('li', {}, p ? h('button', {type: 'button', textContent: name, title: 'Open this paper at these pages', onclick: () => navigate({paper: r.paper, page: r.from})}) : h('span', {textContent: name + ' (no longer in this project)'}),
+      h('small', {textContent: ` · ${pagesLabel(r.from, r.to)}${r.of ? ` of ${r.of}` : ''}`}));
+  };
+  return h('details', {className: 'reads'},
+    h('summary', {textContent: `READ ${papersRead} PAPER${papersRead === 1 ? '' : 'S'} · ${pagesRead} PAGE${pagesRead === 1 ? '' : 'S'}${meta.readLimit ? ' · LIMIT REACHED' : ''}`}),
+    h('ul', {}, ...reads.map(item)),
+    meta.readLimit ? h('p', {textContent: meta.readLimit === 'rounds' ? 'The model asked to read more often than one answer allows; it answered with what it had read.' : 'The reading budget for one answer was used up; the model answered with what it had read.'}) : '');
+}
+// While an answer is being written: what the model is reading now (chat-progress events of this window).
+let reading = null; // {chatId, list, current}
+function showReading(ev) {
+  if (!reading || ev.chatId !== reading.chatId || !ev.paper) return;
+  const t = String(ev.paper.title || ev.paper.label || 'a paper'), name = `“${t.length > 70 ? t.slice(0, 69).trimEnd() + '…' : t}”`;
+  if (!reading.current) { reading.current = h('li'); reading.list.append(reading.current); }
+  const li = reading.current, range = Number.isInteger(ev.from) && Number.isInteger(ev.to) ? `, ${pagesLabel(ev.from, ev.to)}` : '';
+  if (ev.step === 'done') { li.textContent = `Read ${name}${range}`; li.className = 'done'; reading.current = null; }
+  else li.textContent = `Reading ${name}${range}…`;
+  if (chat?.id === ev.chatId) reading.list.parentElement?.scrollIntoView({behavior: 'smooth', block: 'end'});
 }
 let scrollTimer;
 $('#messages').addEventListener('scroll', () => {
@@ -1093,8 +1128,17 @@ $('#messages').addEventListener('scroll', () => {
 // ---------- asking ----------
 $('#ask').onsubmit = async e => {
   e.preventDefault();
-  const typed = $('#question').value.trim(), ctx = context, whole = isProjectChat(chat);
+  const typed = $('#question').value.trim(), whole = isProjectChat(chat);
+  let ctx = context;
   if ((!typed && !ctx) || !chat || (!doc && !whole) || working || loading) return;
+  // After a citation of another paper was followed, the chat's own paper comes back first: its text is
+  // what the question is sent with (an attachment taken from the other paper is dropped).
+  if (!whole && chat.paperId && chat.paperId !== paper?.id) {
+    await openPaper(chat.paperId, null, chat.id);
+    if (!chat || chat.paperId !== paper?.id || !doc || working || loading) return;
+    ctx = context;
+    if (!typed && !ctx) { notice('The paper of this chat is open again. Ask your question.'); return; }
+  }
   // In a project chat an attachment also names its paper, so the model can cite it.
   const of = whole && paper ? ` of ${paperLabels(project.papers).get(paper.id) || paperTitle(paper)} (paper ${shortId(paper.id)})` : '';
   const question = !ctx ? typed : ctx.kind === 'passage'
@@ -1112,11 +1156,13 @@ $('#ask').onsubmit = async e => {
   const web = webSearch;
   const pending = addMessage('user', question, {at: new Date().toISOString(), image, web}); $('#question').value = ''; setContext(null);
   notice(whole ? `Searching the project's papers${web ? ' (and the web)' : ''} and asking ${session.model}… The first question in a project indexes its papers, which can take a minute.` : `Reading the paper${web ? ' (and searching the web)' : ''} and asking ${session.model}…`);
-  const thinking = h('article', {className: 'message assistant thinking', ariaLabel: 'Margin is thinking'}, h('small', {textContent: 'MARGIN · ' + session.model}), h('div', {className: 'dots'}, h('span'), h('span'), h('span')));
+  const readingList = h('ul', {className: 'reading'});
+  const thinking = h('article', {className: 'message assistant thinking', ariaLabel: 'Margin is thinking'}, h('small', {textContent: 'MARGIN · ' + session.model}), readingList, h('div', {className: 'dots'}, h('span'), h('span'), h('span')));
+  reading = {chatId: target.id, list: readingList, current: null};
   $('#messages').append(thinking); thinking.scrollIntoView({behavior: 'smooth', block: 'end'});
   try {
     const equations = whole ? null : await equationPayload(question, target.messages);
-    const r = await api(`/api/projects/${projectId}/chats/${target.id}/messages`, {body: {question, ...(whole ? {} : {pages, equations}), ...(image ? {image} : {}), ...(web ? {web} : {})}});
+    const r = await api(`/api/projects/${projectId}/chats/${target.id}/messages`, {body: {question, ...(whole ? (paper ? {openPaperId: paper.id} : {}) : {pages, equations, paperId: paper.id}), ...(image ? {image} : {}), ...(web ? {web} : {})}});
     target.messages.push(...r.messages); target.title = r.chat.title;
     if (project?.id === projectId) { const summary = project.chats.find(c => c.id === r.chat.id); if (summary) Object.assign(summary, r.chat); project.chats.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)); }
     if (chat === target) {
@@ -1132,7 +1178,7 @@ $('#ask').onsubmit = async e => {
   } catch (err) {
     notice(err.message);
     if (chat === target) { pending.remove(); $('#question').value = typed; setContext(ctx); }
-  } finally { thinking.remove(); working = false; controls(); showStatus(); }
+  } finally { thinking.remove(); reading = null; working = false; controls(); showStatus(); }
 };
 // Enter sends; Ctrl+Enter (or Shift+Enter) inserts a line break. Ignore Enter while an IME is composing.
 $('#question').onkeydown = e => {
@@ -1705,6 +1751,7 @@ async function openProjectFromToast(pid) {
   if (pid !== project?.id && projects.some(x => x.id === pid)) await switchProject(pid);
 }
 async function onServerEvent(ev) {
+  if (ev.type === 'chat-progress') { if (ev.client === CLIENT_ID) showReading(ev); return; } // sent to the window that asked
   if (ev.client && ev.client === CLIENT_ID) return; // this window's own change: its code already updated the view
   if (ev.type === 'paper-added' && ev.paper?.id) {
     const fresh = !announcedRecently(ev.paper.id);
