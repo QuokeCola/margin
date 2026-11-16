@@ -461,13 +461,15 @@ dialog .segmented label{margin:0;display:block;cursor:pointer;position:relative}
 
 /* ---------- annotations: highlights, notes, comments panel (src/annotations.js) ---------- */
 /* The comments panel docks to the right of the pages; in a narrow reader it lies over them instead. */
-.reader-body{flex:1;min-height:0;display:flex;position:relative;container-type:inline-size}
+.reader-body{flex:1;min-height:0;display:flex;position:relative;container-type:inline-size;overflow-x:clip}
 .reader-body>#pdf{min-width:0}
 #note-mode,#ann-toggle{font-size:11px;padding:5px 10px;white-space:nowrap}
 #note-mode.active,#ann-toggle[aria-pressed=true]{background:var(--primary);color:var(--on-primary);border-color:var(--primary)}
 .ann-count{display:inline-block;margin-left:6px;min-width:16px;padding:0 4px;border-radius:999px;background:var(--green);color:var(--on-primary);font-size:10px;line-height:16px;text-align:center}
 #ann-panel{width:300px;flex:none;display:flex;flex-direction:column;min-height:0;background:var(--bg);border-left:1px solid var(--line-2);color:var(--text)}
 #ann-panel[hidden]{display:none}
+#ann-panel.ann-in{animation:ann-in .2s cubic-bezier(.2,.7,.3,1) both}
+@keyframes ann-in{from{opacity:0;transform:translateX(20px)}to{opacity:1;transform:none}}
 .ann-panel-head{display:flex;align-items:center;gap:8px;padding:8px 6px 8px 12px;border-bottom:1px solid var(--line-2);background:var(--toolbar)}
 .ann-panel-head small{font-size:10px;letter-spacing:1.8px;color:var(--eyebrow)}
 #ann-total{font-size:11px;color:var(--meta);margin-right:auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
