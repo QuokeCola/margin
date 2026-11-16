@@ -18,6 +18,8 @@ import {buildEntries, mentionedLabels, cropGeometry, keyOf, CAPS, PNG_MAX, JPEG_
 import {createEquationEditor} from './eqedit.js';
 import {extractVisuals, stripVisuals, buildSrcdoc, themeVars, clampVisualHeight, visualFileName, VISUAL_START_HEIGHT} from './visuals.js';
 import {createAnnotations, COLORS} from './annotations.js';
+import {createTraceCard} from './trace.js';
+import {citingSentence} from '../lib/citation-trace.mjs';
 import {LABEL, COMPANY, providerOf, connectionText, composeHint, webTitle, searchNote, keyHint, settingsBody, savingText} from './providers.js';
 pdfjs.GlobalWorkerOptions.workerSrc = worker;
 applyTheme();
@@ -599,7 +601,7 @@ async function closePaper({keepChat = false} = {}) {
   await renderQueue.catch(() => {});
   await destroyDoc();
   if (!keepChat) chat = null;
-  eqEditor.reset(); ann.reset();
+  eqEditor.reset(); ann.reset(); traceCard.close();
   doc = null; paper = null; pages = []; index = {}; overrides = {}; activeRef = null; pageBoxes = {}; autoByPage = {}; eqByPage = {}; quotePages = {}; setContext(null); hidePop(); setMarking(false); hideRefCard();
   eqEntries = []; cropMemo = new Map(); eqCropping = Promise.resolve();
   bib = {start: null, entries: new Map()}; refHits = {}; refRecords = []; refByNum = new Map(); refsState = 'idle';
@@ -1271,7 +1273,7 @@ $('#pdf').addEventListener('mouseup', e => {
     const el = sel.anchorNode?.parentElement?.closest('.textLayer')?.closest('.pdf-page');
     if (sel.isCollapsed || text.length < 2 || !el) {
       const hit = pageHit(e);
-      if (hit?.ref) { showRefCard(hit.ref.nums, e.clientX, e.clientY); return; }
+      if (hit?.ref) { showRefCard(hit.ref.nums, e.clientX, e.clientY); traceMarker(hit); return; }
       if (hit && ann.clickAt(hit.el, hit.u, hit.v)) return; // a highlight: select it and show its comment
       if (hit?.eq) showPop(e.clientX, e.clientY, `Ask AI about Eq. (${hit.eq.label}) ↗`, () => attachEquation(hit.eq));
       return;
@@ -1424,6 +1426,35 @@ function refItem(n, open) {
   if (rec.doi) actions.append(h('a', {className: 'small-link', href: `https://doi.org/${rec.doi}`, target: '_blank', rel: 'noopener noreferrer', textContent: 'DOI ↗'}));
   item.append(actions);
   return item;
+}
+
+// "Where does this citation come from" (src/trace.js): a click on a marker whose cited paper is in the project
+// also opens a floating card beside the reference card, showing where in that paper the citing sentence comes
+// from. At most TRACE_MAX_REFS papers are traced per marker (one small model call each, unless saved).
+const TRACE_MAX_REFS = 3;
+const traceCard = createTraceCard({h, api, pdfjs, wasmUrl: new URL('pdfjs-wasm/', location.href).href, openAt: openAtSpot});
+function traceMarker(hit) {
+  const n = Number(hit.el.dataset.page), id = paper?.id;
+  const targets = hit.ref.nums.slice(0, 6).map(k => ({n: k, have: refByNum.get(k) && inProject(refByNum.get(k))})).filter(t => t.have && t.have.id !== id)
+    .slice(0, TRACE_MAX_REFS).map(t => ({n: t.n, id: t.have.id, title: paperTitle(t.have)}));
+  if (!id || !targets.length) { traceCard.close(); return; }
+  // The marker's text item and its place in it (the same arithmetic as indexReferences, so the numbers are equal).
+  const W = Number(hit.el.dataset.width), H = Number(hit.el.dataset.height), boxes = pageBoxes[n] || [];
+  let at = null;
+  for (let i = 0; i < boxes.length && !at; i++) {
+    const b = boxes[i]; if (b.y0 / H !== hit.ref.box.y0) continue;
+    const w = b.x1 - b.x0, len = Math.max(1, b.s.length), m = findMarkers(b.s).find(m => (b.x0 + w * m.index / len) / W === hit.ref.box.x0);
+    if (m) at = {i, index: m.index, length: m.length};
+  }
+  const cite = at ? citingSentence(boxes, at) : null, c = $('#ref-card'); // offset sizes: its bounding rectangle is scaled while it pops in
+  traceCard.open({paperId: id, targets, cite: cite && cite.sentence.length >= 12 ? cite : null,
+    near: {left: c.offsetLeft, top: c.offsetTop, right: c.offsetLeft + c.offsetWidth, bottom: c.offsetTop + c.offsetHeight}});
+}
+// "Open at this spot": the cited paper in the reader, at the quoted words (closes the card with the paper it belongs to).
+async function openAtSpot(id, page, quote) {
+  if (working || loading) { notice('Wait for the answer to finish, then try again.'); return; }
+  if (paper?.id !== id) { await openPaper(id); if (paper?.id !== id) return; }
+  await navigate({page, quote, anchor: true});
 }
 
 // Get a cited paper into the project: open-access copy, then (desktop) the sign-in window,

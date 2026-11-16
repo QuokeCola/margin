@@ -14,6 +14,7 @@ import {paperLabels} from './lib/labels.mjs';
 import {PROVIDERS, PROVIDER_NAMES, KEY_VARS, MODEL_VARS, ANTHROPIC_KEY_PATTERN, ANTHROPIC_FALLBACK_MODELS, providerOf, modelOf, createClient, listModels as listProviderModels, answerTurn, visionJSON, labelPrompt, LABEL_INSTRUCTIONS} from './lib/llm.mjs';
 import {cleanOverrides, migrateOverrides, parseAiEquations, mergeEquations} from './lib/equations.mjs';
 import {ANNOTATION_ID, REPLY_ID, LIMITS as ANNOTATION_LIMITS, AI_REPLY_INSTRUCTIONS, AI_REPLY_MAX_TOKENS, aiReplyPrompt} from './lib/annotations.mjs';
+import {TRACE, TRACE_V, TRACE_INSTRUCTIONS, traceKeyText, traceQuery, tracePrompt, parseTrace, verifyQuotes, matchText, normSentence} from './lib/citation-trace.mjs';
 import {validateEquations, planTurn, indexText, imageCaption, keyOf, buildEntries, mentionedLabels, pickImages, CAPS} from './lib/eq-context.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
@@ -524,6 +525,71 @@ app.get('/api/papers/:id/references', async (req, res) => {
     p.refs = {at: now(), ids: want.join(','), items}; await store.savePaper(p);
     res.json({items});
   } catch { res.status(502).json({error: 'Could not reach OpenAlex for the reference list.'}); }
+});
+// ---------- citation tracing ----------
+// "Where does this citation come from": POST /api/papers/:id/trace-citation {targetId, sentence, refNum?,
+// context?: {before, after}, retry?} for a sentence of paper :id that cites paper targetId (both in the library).
+// The cited paper's passages are ranked against the sentence with the project-chat index (embeddings with an
+// OpenAI key, keywords otherwise); one small model call then picks verbatim quotes, and only quotes found in
+// the cited paper's page text are passed on (lib/citation-trace.mjs). Answers:
+//   {status: 'found' | 'general' | 'none', note, quotes: [{page, quote}], matches?, verified: true, cached, mode, model, at, target}
+//   {status: 'unverified', note, reason: 'no-key' | 'model-failed' | 'bad-answer', quotes: [], matches: [{page, text}], verified: false, cached: false, mode, target}
+// `matches` are the top ranked passages, sent with 'none' and 'unverified' as search matches, never as the source.
+// Model answers are kept in papers/<id>/citation-sources.json (keyed by cited paper + sentence); retry: true
+// asks again. Without a key, or when the model call fails, nothing is cached.
+app.post('/api/papers/:id/trace-citation', async (req, res) => {
+  if (!ids(req, res)) return;
+  const {targetId, refNum, sentence, context, retry} = req.body || {};
+  if (!PAPER_ID.test(targetId || '')) return res.status(400).json({error: 'Invalid id.'});
+  const line = v => typeof v === 'string' ? v.replace(/\s+/g, ' ').trim() : '';
+  const text = line(sentence), before = line(context?.before).slice(-TRACE.context * 2), after = line(context?.after).slice(0, TRACE.context * 2);
+  if (text.length < 12 || text.length > 1000) return res.status(400).json({error: 'The citing sentence is missing or too long.'});
+  if (refNum !== undefined && !(Number.isInteger(refNum) && refNum > 0 && refNum < 1000)) return res.status(400).json({error: 'Invalid reference number.'});
+  const [paper, target] = await Promise.all([store.loadPaper(req.params.id), store.loadPaper(targetId)]);
+  if (!paper) return res.status(404).json({error: 'Paper not found.'});
+  if (!target) return res.status(404).json({error: 'The cited paper is not in the library.'});
+  const about = {target: {id: target.id, title: target.meta?.title || target.name}};
+  const key = createHash('sha256').update(traceKeyText(target.id, text)).digest('hex').slice(0, 32);
+  if (retry !== true) {
+    const hit = await store.loadTrace(paper.id, TRACE_V, key);
+    if (hit) return res.json({status: hit.status, note: hit.note, quotes: hit.quotes, ...(hit.matches ? {matches: hit.matches} : {}), verified: true, cached: true, mode: hit.mode, model: hit.model, at: hit.at, ...about});
+  }
+  const abort = new AbortController();
+  res.on('close', () => { if (!res.writableEnded) abort.abort(); });
+  // Rank the cited paper's passages; when its embeddings cannot be made, by keywords.
+  const query = traceQuery({sentence: text, before}), top = {k: TRACE.passages, perPaper: TRACE.passages}, embed = await embedClient();
+  let ranked = await indexer.retrieve([target.id], query, embed, top);
+  if (ranked.failed.length && embed) ranked = await indexer.retrieve([target.id], query, null, top);
+  if (abort.signal.aborted) return;
+  if (ranked.failed.length) return res.status(422).json({error: 'The text of the cited paper could not be read.'});
+  if (ranked.empty.length) return res.status(422).json({error: 'No text could be extracted from the cited paper (it may need OCR).'});
+  const passages = ranked.passages.map(x => ({page: x.page, text: x.text}));
+  const matches = passages.slice(0, TRACE.matches).map(x => ({page: x.page, text: matchText(x.text)}));
+  const unverified = (reason, note) => res.json({status: 'unverified', note, reason, quotes: [], matches, verified: false, cached: false, mode: ranked.mode, ...about});
+  const prov = provider(), apiKey = apiKeyOf(prov), used = model(prov);
+  if (!apiKey) return unverified('no-key', `Add your ${PROVIDER_NAMES[prov]} API key in Settings to have the source checked.`);
+  let result;
+  try {
+    const m = target.meta || {};
+    const {source, question} = tracePrompt({sentence: text, before, after, refNum, passages,
+      target: {title: about.target.title, authors: m.authors, year: m.year, abstract: m.abstract, firstPage: m.abstract ? null : await indexer.firstPage(target.id)}});
+    if (abort.signal.aborted) return;
+    result = await answerTurn(prov, {apiKey, model: used, instructions: TRACE_INSTRUCTIONS, source, history: [], question, cache: 'system',
+      maxTokens: TRACE.maxTokens, signal: AbortSignal.any([abort.signal, AbortSignal.timeout(TRACE.timeoutMs)])});
+  } catch (e) {
+    if (abort.signal.aborted) return;
+    const status = e.status;
+    if (!status && !e.refusal) console.error('Citation trace failed:', e.message);
+    return unverified('model-failed', e.refusal ? 'The model declined this request.' : status === 401 ? 'The API key was rejected. Update it in Settings.' : status === 429 ? `${PROVIDER_NAMES[prov]} quota or rate limit reached.` : status === 529 ? 'The model is overloaded right now.' : status === 404 ? `The model "${used}" is unavailable.` : 'The model request failed or timed out.');
+  }
+  if (abort.signal.aborted) return;
+  const answer = parseTrace(result.text);
+  if (!answer) return unverified('bad-answer', 'The model did not answer in the expected form.');
+  const checked = verifyQuotes(answer, (await indexer.pageText(target.id)).pages);
+  const out = {status: checked.status, note: checked.note, quotes: checked.quotes, ...(checked.status === 'none' ? {matches} : {}), mode: ranked.mode, model: result.model || used, at: now()};
+  await store.saveTrace(paper.id, TRACE_V, key, {...out, targetId: target.id, ...(refNum ? {refNum} : {}), sentence: normSentence(text), dropped: checked.dropped}, TRACE.cacheItems)
+    .catch(e => console.warn('Could not save the traced citation:', e.message));
+  res.json({...out, verified: true, cached: false, ...about});
 });
 app.post('/api/works/search', async (req, res) => {
   const q = req.body?.q;
