@@ -467,16 +467,16 @@ dialog .segmented label{margin:0;display:block;cursor:pointer;position:relative}
 #note-mode.active,#ann-toggle[aria-pressed=true]{background:var(--primary);color:var(--on-primary);border-color:var(--primary)}
 .ann-count{display:inline-block;margin-left:6px;min-width:16px;padding:0 4px;border-radius:999px;background:var(--green);color:var(--on-primary);font-size:10px;line-height:16px;text-align:center}
 #ann-panel{width:300px;flex:none;display:flex;flex-direction:column;min-height:0;background:var(--bg);border-left:1px solid var(--line-2);color:var(--text)}
-#ann-panel[hidden]{display:none}
-#ann-panel.ann-in{animation:ann-in .2s cubic-bezier(.2,.7,.3,1) both}
-@keyframes ann-in{from{opacity:0;transform:translateX(20px)}to{opacity:1;transform:none}}
+#ann-panel{overflow:hidden;transition:width var(--soft) var(--ease-out),opacity .25s ease,border-left-width 0s,visibility 0s}
+#ann-panel>*{min-width:300px}
+#ann-panel[hidden]{display:flex;width:0;opacity:0;visibility:hidden;border-left-width:0;transition:width var(--soft) var(--ease-out),opacity .25s ease,border-left-width 0s var(--soft),visibility 0s var(--soft)}
 .ann-panel-head{display:flex;align-items:center;gap:8px;padding:8px 6px 8px 12px;border-bottom:1px solid var(--line-2);background:var(--toolbar)}
 .ann-panel-head small{font-size:10px;letter-spacing:1.8px;color:var(--eyebrow)}
 #ann-total{font-size:11px;color:var(--meta);margin-right:auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #ann-export{flex:none}
 #ann-list{overflow:auto;flex:1;overscroll-behavior:contain}
 .ann-empty{padding:32px 18px;margin:0;font-size:12.5px;color:var(--empty-text);text-align:center;line-height:1.6}
-@container (max-width:640px){#ann-panel{position:absolute;inset:0 0 0 auto;width:min(320px,90%);z-index:20;box-shadow:-10px 0 30px var(--shadow-3)}}
+@container (max-width:640px){#ann-panel{position:absolute;inset:0 0 0 auto;width:min(320px,90%);z-index:20;box-shadow:-10px 0 30px var(--shadow-3)}#ann-panel[hidden]{width:0}}
 /* on the page: highlights lie under the text layer (so text over them can still be selected), icons above it */
 .ann-layer{position:absolute;inset:0;pointer-events:none}
 .ann-hl{position:absolute;z-index:0;border-radius:2px;opacity:.5;mix-blend-mode:multiply}

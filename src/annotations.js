@@ -518,10 +518,7 @@ export function createAnnotations(app) {
 
   // ---------- panel ----------
   function showPanel(on) {
-    const panel = $('#ann-panel'), was = panel.hidden;
-    panel.hidden = !on; $('#ann-toggle').setAttribute('aria-pressed', on);
-    // Slide in when it opens (not when it is restored open at startup); the class goes away with the animation.
-    if (on && was) { panel.classList.add('ann-in'); panel.addEventListener('animationend', () => panel.classList.remove('ann-in'), {once: true}); }
+    $('#ann-panel').hidden = !on; $('#ann-toggle').setAttribute('aria-pressed', on);
     try { localStorage.setItem(PANEL_KEY, on ? '1' : ''); } catch {}
     renderPanel();
     if (on && selected) select(selected, true);
