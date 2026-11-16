@@ -548,3 +548,28 @@ button.ann-quote:hover{background:var(--hover)}
 #pdf-pop .ann-swatch[aria-pressed=true]{box-shadow:0 0 0 2px var(--surface),0 0 0 3.5px var(--btn-text)}
 #pdf-pop #pop-comment{background:transparent;color:var(--btn-text);box-shadow:none;padding:3px 9px;border:1px solid var(--btn-border)}
 #pdf-pop #pop-comment:hover{background:var(--hover)}
+
+/* ---------- citation source card (src/trace.js): floats beside the reference card, dragged by its header ---------- */
+#trace-card{position:fixed;z-index:59;display:flex;flex-direction:column;width:min(440px,calc(100vw - 16px));max-height:min(78vh,680px);background:var(--surface);border:1px solid var(--btn-border);border-radius:12px;box-shadow:0 14px 40px var(--shadow-4);animation:pop .18s var(--ease-out)}
+.trace-head{flex:none;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 6px 7px 14px;border-bottom:1px solid var(--line-ref);background:var(--quiet);border-radius:12px 12px 0 0;font-size:12px;font-weight:600;color:var(--btn-text);cursor:move;user-select:none;touch-action:none}
+.trace-body{overflow:auto;padding:10px 14px 12px}
+.trace-sentence{margin:0 0 10px;padding:1px 0 1px 9px;border-left:3px solid var(--line-2);font-size:11.5px;line-height:1.5;color:var(--muted);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.trace-target+.trace-target{border-top:1px solid var(--line-ref);margin-top:12px;padding-top:12px}
+.trace-state{display:flex;gap:8px;align-items:baseline;margin-top:8px;font-size:12px;line-height:1.5;color:var(--body-2)}
+.trace-badge{flex:none;font-size:10.5px;font-weight:600;padding:1px 8px;border-radius:999px;border:1px solid var(--btn-border);background:var(--tint);color:var(--btn-text);white-space:nowrap}
+.trace-badge.ok{color:var(--ok);border-color:var(--ok)}
+.trace-badge.warn{color:var(--warn);border-color:var(--warn)}
+.trace-badge.busy{animation:trace-pulse 1.2s ease-in-out infinite}
+@keyframes trace-pulse{50%{opacity:.45}}
+.trace-warn{margin:10px 0 0;font-size:11.5px;line-height:1.5;color:var(--warn)}
+.trace-spot{margin-top:10px;border:1px solid var(--line-ref);border-radius:8px;overflow:hidden}
+.trace-spot.unverified{border-style:dashed;border-color:var(--warn)}
+.trace-shot-box{display:flex;align-items:center;justify-content:center;min-height:46px;background:var(--quiet);border-bottom:1px solid var(--line-ref)}
+.trace-shot-box .hint{margin:0;padding:6px 10px}
+.trace-shot{display:block;width:100%;height:auto}
+.trace-quote{margin:8px 10px 0;padding:0 0 0 9px;border-left:3px solid var(--line-2);font:13px/1.5 Georgia,serif;color:var(--text);max-height:7.5em;overflow:auto}
+.trace-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 10px 8px}
+.trace-page{font-size:11.5px;color:var(--muted)}
+.trace-foot{padding:10px 0 0}
+.trace-foot .hint{margin:0}
+:root[data-theme=dark] .trace-shot{filter:brightness(.9)}
