@@ -581,3 +581,19 @@ button.ann-quote:hover{background:var(--hover)}
 .trace-foot{padding:10px 0 0}
 .trace-foot .hint{margin:0}
 :root[data-theme=dark] .trace-shot{filter:brightness(.9)}
+/* Reader toolbar: every control has the same height, text size and vertical centring, icons share one drawn
+   style, and the tools sit as one group on the right. */
+.reader>.toolbar{justify-content:flex-start;align-items:center;gap:6px;font-size:11px;line-height:1}
+.reader>.toolbar button,.reader>.toolbar input[type=number]{box-sizing:border-box;height:28px;margin:0;padding:0 10px;font-size:11px;line-height:1}
+.reader>.toolbar button{display:inline-flex;align-items:center;justify-content:center;gap:6px}
+.reader>.toolbar input[type=number]{width:46px;padding:0 6px}
+.reader>.toolbar input[type=checkbox]{margin:0;width:14px;height:14px}
+.tb-follow,.tb-page,.tb-page>label{display:inline-flex;align-items:center;gap:6px;height:28px}
+.tb-page{margin-left:6px}
+.tb-icon{width:14px;height:14px;flex:none;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.reader>.toolbar #marker{margin-left:auto;margin-right:0}
+.reader>.toolbar #eq-edit{margin-right:0}
+.reader>.toolbar .zoom{margin-left:4px}
+.reader>.toolbar .zoom button{padding:0;min-width:30px}
+.reader>.toolbar #zoom-reset{min-width:50px}
+.reader>.toolbar .ann-count,.reader>.toolbar .eq-count{display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;margin-left:0;min-width:16px;height:16px;padding:0 5px;line-height:1}
