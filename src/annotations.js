@@ -519,8 +519,9 @@ export function createAnnotations(app) {
   // ---------- panel ----------
   // The panel folds like the library: the layout changes once, and the panel and the pages slide with
   // transforms (no layout or paint per frame; animating the width re-laid the PDF area on every frame).
-  // While it slides the panel lies over the PDF area, which has its full width under it, so the PDF's
-  // scrollbar is covered and uncovered by the panel and never stands apart from it.
+  // While it slides the panel lies over the PDF area, which has its full width; the PDF area itself is
+  // shifted left as far as the panel has come in, so its scrollbar stays against the panel's edge the whole
+  // way (it neither jumps nor hides under the panel), and the pages are shifted back by the same amount.
   // Opening: the panel slides in over the old layout and the pages slide to where they will be, then the
   // PDF area narrows. Closing: the PDF area widens first, under the panel, then both slide.
   let panelFold = null;
@@ -536,15 +537,18 @@ export function createAnnotations(app) {
     const pageEl = [...document.querySelectorAll('.pdf-page')].find(el => el.getBoundingClientRect().bottom >= mid) || $('.pdf-page');
     // Two layouts: the PDF area beside the panel ("docked") and at full width with the panel over it ("over").
     if (on) { panel.hidden = false; settle(); }
-    const docked = at(pageEl), dockedScrolls = scrolls(), w = panel.offsetWidth;
+    const right = () => pdf.getBoundingClientRect().right;
+    const docked = at(pageEl), dockedRight = right(), w = panel.offsetWidth;
     panel.classList.add('ann-over');
-    const over = at(pageEl), overScrolls = scrolls();
+    const over = at(pageEl), overScrolls = scrolls(), shift = right() - dockedRight; // how much narrower the PDF area is beside the panel (0 when the panel is a drawer over it)
     const dx = docked[0] - over[0], dy = docked[1] - over[1]; // the docked place of the pages, from their place at full width
     const root = getComputedStyle(document.documentElement), opts = {duration: parseFloat(root.getPropertyValue('--soft')) * 1000 || 380, easing: root.getPropertyValue('--ease-out').trim() || 'ease-out', fill: 'both'};
     const move = (x, y) => ({transform: `translate(${x}px,${y}px)`}), away = move(w, 0), home = move(0, 0); // opaque all the way: it covers the PDF like a curtain
     if (!overScrolls) pdf.style.overflowX = 'hidden'; // the sliding pages must not bring up a scrollbar
-    const anims = [panel.animate(on ? [away, home] : [home, away], opts),
-      ...(pagesEl && (dx || dy) ? [pagesEl.animate(on ? [move(0, 0), move(dx, dy)] : [move(dx, dy), move(0, 0)], opts)] : [])];
+    const fold = (el, a, b) => el.animate(on ? [a, b] : [b, a], opts); // a: panel away (PDF at full width), b: panel in place
+    const anims = [fold(panel, away, home),
+      ...(shift ? [fold(pdf, move(0, 0), move(-shift, 0))] : []),
+      ...(pagesEl && (dx + shift || dy) ? [fold(pagesEl, move(0, 0), move(dx + shift, dy))] : [])];
     const end = () => {
       if (panelFold !== end) return;
       panelFold = null;
