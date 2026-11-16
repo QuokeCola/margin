@@ -1224,9 +1224,13 @@ function setLibrary(hidden) {
   if (body.classList.contains('no-library') === hidden) return;
   if (!chatEl.animate || matchMedia('(max-width:800px), (prefers-reduced-motion: reduce)').matches) { body.classList.toggle('no-library', hidden); return; }
   const left = el => el ? el.getBoundingClientRect().left : 0, scrolls = () => pdf.scrollWidth > pdf.clientWidth;
-  const c0 = left(chatEl), p0 = left(pagesEl), s0 = scrolls();
+  // The page column spans the reader and the pages are centred in it, so a page tells how far the pages move
+  // (half as far as the reader's edge when they fit); the page nearest the middle of the view is the one looked at.
+  const mid = pdf.getBoundingClientRect().top + pdf.clientHeight / 2;
+  const pageEl = [...document.querySelectorAll('.pdf-page')].find(el => el.getBoundingClientRect().bottom >= mid) || $('.pdf-page');
+  const c0 = left(chatEl), p0 = left(pageEl), s0 = scrolls();
   body.classList.toggle('no-library', hidden);
-  const dc = c0 - left(chatEl), dp = p0 - left(pagesEl), clip = !s0 && !scrolls(); // offsets of the old places from the new ones
+  const dc = c0 - left(chatEl), dp = p0 - left(pageEl), clip = !s0 && !scrolls(); // offsets of the old places from the new ones
   if (!hidden) body.classList.add('no-library', 'lib-in'); // back to the old layout, the library already fading in under the chat column
   const root = getComputedStyle(document.documentElement), opts = {duration: parseFloat(root.getPropertyValue('--soft')) * 1000 || 380, easing: root.getPropertyValue('--ease-out').trim() || 'ease-out', fill: 'both'};
   const frames = d => hidden ? [{transform: `translateX(${d}px)`}, {transform: 'translateX(0)'}] : [{transform: 'translateX(0)'}, {transform: `translateX(${-d}px)`}];
